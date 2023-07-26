@@ -14,10 +14,8 @@ func main() {
 
 	// 注册登陆二维码回调
 	bot.UUIDCallback = func(uuid string) {
-		//qrcodeurl := openwechat.GetQrcodeUrl(uuid)
-		qrcodeurl := "https://login.weixin.qq.com/l/" + uuid
-		fmt.Println(qrcodeurl)
-		qrterminal.Generate(qrcodeurl, qrterminal.L, os.Stdout)
+		fmt.Println(openwechat.GetQrcodeUrl(uuid))
+		qrterminal.Generate("https://login.weixin.qq.com/l/"+uuid, qrterminal.L, os.Stdout)
 	}
 	// 创建热存储容器对象
 	reloadStorage := openwechat.NewFileHotReloadStorage(filepath.Join(os.Getenv("DATA"), "storage.json"))
