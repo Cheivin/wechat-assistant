@@ -65,8 +65,8 @@ func main() {
 				atFlag = "@" + atName
 			}
 			content := strings.TrimSpace(strings.TrimPrefix(msgContent, atFlag))
-
-			switch content {
+			command := strings.SplitN(content, " ", 2)[0]
+			switch command {
 			case "龙王":
 				records, err := TopN(sender.UserName, 1)
 				if err != nil {
@@ -96,12 +96,24 @@ func main() {
 					msg := "今日水群排名如下:\n"
 					for i := range *records {
 						rank := (*records)[i]
-						msg += fmt.Sprintf("%s, 水群 %d 条消息\n", rank.Username, rank.Total)
+						msg += fmt.Sprintf("%d. %s, 水群 %d 条消息\n", i+1, rank.Username, rank.Total)
 					}
-					msg += "恭喜这些水王为本群做出的贡献~"
+					msg += "感谢这些水王为本群做出的贡献~"
 					_, _ = ctx.ReplyText(msg)
 				}
 				ctx.Abort()
+			default:
+				// TODO 插件机制
+				//if fn, err := LoadPlugin("plugins/test/handler.go"); err == nil {
+				//	res, err := fn(db, ctx)
+				//	if err != nil {
+				//		fmt.Println("调用插件出错")
+				//	} else if res {
+				//		ctx.Abort()
+				//	}
+				//} else {
+				//	fmt.Println("加载插件出错", err)
+				//}
 			}
 		}
 	})
