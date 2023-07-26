@@ -30,10 +30,12 @@ FROM alpine as prod
 RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories
 
 # 更换时区
-ENV TZ=Asia/Shanghai
+ENV TZ=Asia/Shanghai \
+    DATA=${DATA:-"/data"}
 RUN apk --no-cache add tzdata && cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && echo '$TZ' >  /etc/timezone
 
 WORKDIR /app/dist
+WORKDIR /data
 COPY --from=build /go/release/app /app/dist/app
 
 ENTRYPOINT /app/dist/app
