@@ -112,7 +112,8 @@ func StatisticGroup(msg *openwechat.Message) error {
 }
 
 type Rank struct {
-	UID      string ``
+	GID      string `gorm:"primaryKey"`
+	UID      string `gorm:"primaryKey"`
 	Username string ``
 	Total    int64  ``
 }
@@ -122,9 +123,9 @@ func TopN(GID string, limit int) (*[]Rank, error) {
 	ranks := new([]Rank)
 	fmt.Println(GID, date)
 	return ranks, db.Model(&Statistics{}).
-		Select("uid,username, sum(count) as total").
+		Select("g_id, uid, username, sum(count) as total").
 		Where("g_id = ? and date = ?", GID, date).
-		Group("g_id,uid").
+		Group("g_id,uid,username").
 		Order("total desc").
 		Limit(limit).
 		Find(ranks).Error
