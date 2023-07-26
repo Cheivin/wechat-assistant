@@ -5,6 +5,7 @@ import (
 	"github.com/eatmoreapple/openwechat"
 	"github.com/mdp/qrterminal/v3"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -19,7 +20,7 @@ func main() {
 		qrterminal.Generate(qrcodeurl, qrterminal.L, os.Stdout)
 	}
 	// 创建热存储容器对象
-	reloadStorage := openwechat.NewFileHotReloadStorage("storage.json")
+	reloadStorage := openwechat.NewFileHotReloadStorage(filepath.Join(os.Getenv("DATA"), "storage.json"))
 	defer reloadStorage.Close()
 
 	// 执行热登录
@@ -34,10 +35,13 @@ func main() {
 		fmt.Println(err)
 		return
 	}
+
+	// 获取所有的好友
+	friends, err := self.Friends()
+	fmt.Println(friends, err)
+
+	// 获取所有的群组
 	groups, err := self.Groups()
-	if err != nil {
-		fmt.Println(err)
-	}
 	for _, g := range groups.AsMembers() {
 		fmt.Println("群:", g.NickName, g.DisplayName)
 	}

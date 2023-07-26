@@ -10,26 +10,25 @@ import (
 	"gorm.io/gorm/logger"
 	"log"
 	"os"
+	"path/filepath"
 	"time"
 )
 
 var db *gorm.DB
 
 func init() {
-	newLogger := logger.New(
-		log.New(os.Stdout, "\r\n", log.LstdFlags), // io writer
-		logger.Config{
-			SlowThreshold:             time.Second,  // Slow SQL threshold
-			LogLevel:                  logger.Error, // Log level
-			IgnoreRecordNotFoundError: true,         // Ignore ErrRecordNotFound error for logger
-			ParameterizedQueries:      false,        // Don't include params in the SQL log
-			Colorful:                  false,        // Disable color
-		},
-	)
-
 	var err error
-	db, err = gorm.Open(sqlite.Open("data.db"), &gorm.Config{
-		Logger: newLogger,
+	db, err = gorm.Open(sqlite.Open(filepath.Join(os.Getenv("DATA"), "data.db")), &gorm.Config{
+		Logger: logger.New(
+			log.New(os.Stdout, "\r\n", log.LstdFlags), // io writer
+			logger.Config{
+				SlowThreshold:             time.Second,  // Slow SQL threshold
+				LogLevel:                  logger.Error, // Log level
+				IgnoreRecordNotFoundError: true,         // Ignore ErrRecordNotFound error for logger
+				ParameterizedQueries:      false,        // Don't include params in the SQL log
+				Colorful:                  false,        // Disable color
+			},
+		),
 	})
 	if err != nil {
 		panic(errors.Join(err, errors.New("failed to connect database")))
