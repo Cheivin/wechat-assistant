@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"github.com/eatmoreapple/openwechat"
 	"github.com/glebarez/sqlite"
+	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
+	"gorm.io/gorm/schema"
 	"log"
 	"os"
 	"path/filepath"
@@ -18,7 +20,10 @@ var db *gorm.DB
 
 func init() {
 	var err error
-	db, err = gorm.Open(sqlite.Open(filepath.Join(os.Getenv("DATA"), "data.db")), &gorm.Config{
+	dbType := os.Getenv("DB")
+
+	config := &gorm.Config{
+		NamingStrategy: schema.NamingStrategy{SingularTable: true},
 		Logger: logger.New(
 			log.New(os.Stdout, "\r\n", log.LstdFlags), // io writer
 			logger.Config{
@@ -29,14 +34,44 @@ func init() {
 				Colorful:                  false,        // Disable color
 			},
 		),
-	})
-	if err != nil {
-		panic(errors.Join(err, errors.New("failed to connect database")))
 	}
-	err = db.AutoMigrate(Statistics{})
-	if err != nil {
-		panic(errors.Join(err, errors.New("failed to auto migrate table")))
+
+	switch dbType {
+	case "mysql":
+		host := os.Getenv("MYSQL_HOST")
+		username := os.Getenv("MYSQL_USERNAME")
+		password := os.Getenv("MYSQL_PASSWORD")
+		port := os.Getenv("MYSQL_PORT")
+		database := os.Getenv("MYSQL_DATABASE")
+		parameters := os.Getenv("MYSQL_PARAMETERS")
+		dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?%s", []interface{}{
+			username,
+			password,
+			host,
+			port,
+			database,
+			parameters,
+		}...)
+		// 配置数据库
+		db, err = gorm.Open(mysql.Open(dsn), config)
+		if err != nil {
+			panic(errors.Join(err, errors.New("failed to connect database")))
+		}
+		err = db.Set("gorm:table_options", " DEFAULT CHARSET=utf8mb4").AutoMigrate(Statistics{})
+		if err != nil {
+			panic(errors.Join(err, errors.New("failed to auto migrate table")))
+		}
+	default:
+		db, err = gorm.Open(sqlite.Open(filepath.Join(os.Getenv("DATA"), "data.db")), config)
+		if err != nil {
+			panic(errors.Join(err, errors.New("failed to connect database")))
+		}
+		err = db.AutoMigrate(Statistics{})
+		if err != nil {
+			panic(errors.Join(err, errors.New("failed to auto migrate table")))
+		}
 	}
+
 }
 
 type Statistics struct {
