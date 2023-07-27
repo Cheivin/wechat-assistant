@@ -121,7 +121,7 @@ func main() {
 						if dragon := sender.MemberList.SearchByUserName(1, rank.UID); dragon != nil {
 							msg += fmt.Sprintf("%d. @%s\u2005, 水群 %d 条消息\n", i+1, dragon.First().NickName, rank.Total)
 						} else {
-							msg += fmt.Sprintf("%d. %s, 水群 %d 条消息", i+1, rank.Username, rank.Total)
+							msg += fmt.Sprintf("%d. %s, 水群 %d 条消息\n", i+1, rank.Username, rank.Total)
 						}
 					}
 					msg += "感谢这些水王为本群做出的贡献~"
