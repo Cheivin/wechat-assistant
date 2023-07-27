@@ -7,6 +7,7 @@ require (
 	github.com/glebarez/sqlite v1.9.0
 	github.com/mdp/qrterminal/v3 v3.1.1
 	github.com/traefik/yaegi v0.15.1
+	golang.org/x/time v0.3.0
 	gorm.io/driver/mysql v1.5.1
 	gorm.io/gorm v1.25.2
 )

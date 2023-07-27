@@ -4,14 +4,31 @@ import (
 	"fmt"
 	"github.com/eatmoreapple/openwechat"
 	"github.com/mdp/qrterminal/v3"
+	"golang.org/x/time/rate"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
+
+var (
+	totpSecret = "MZXW6YTBOI======"
+	r          = rate.NewLimiter(rate.Every(3*time.Second), 1)
+)
+
+func init() {
+	secret := os.Getenv("SECRET")
+	if secret != "" {
+		totpSecret = secret
+	}
+	_, err := TOTPToken(totpSecret, uint64(time.Now().Unix()))
+	if err != nil {
+		panic(err)
+	}
+}
 
 func main() {
 	bot := openwechat.DefaultBot(openwechat.Desktop) // 桌面模式
-
 	// 注册登陆二维码回调
 	bot.UUIDCallback = func(uuid string) {
 		fmt.Println(openwechat.GetQrcodeUrl(uuid))
@@ -52,12 +69,17 @@ func main() {
 		sender, _ := ctx.Sender()
 		receiver := sender.MemberList.SearchByUserName(1, ctx.ToUserName)
 		if receiver != nil {
+			// 限流
+			if !r.Allow() {
+				ctx.Abort()
+				return
+			}
 			displayName := receiver.First().DisplayName
 			if displayName == "" {
 				displayName = receiver.First().NickName
 			}
 			var atFlag string
-			msgContent := openwechat.FormatEmoji(ctx.Content)
+			msgContent := strings.TrimSpace(openwechat.FormatEmoji(ctx.Content))
 			atName := openwechat.FormatEmoji(displayName)
 			if strings.Contains(msgContent, "\u2005") {
 				atFlag = "@" + atName + "\u2005"
@@ -65,8 +87,8 @@ func main() {
 				atFlag = "@" + atName
 			}
 			content := strings.TrimSpace(strings.TrimPrefix(msgContent, atFlag))
-			command := strings.SplitN(content, " ", 2)[0]
-			switch command {
+			commands := strings.SplitN(content, " ", 2)
+			switch commands[0] {
 			case "龙王":
 				records, err := TopN(sender.UserName, 1)
 				if err != nil {
@@ -96,24 +118,45 @@ func main() {
 					msg := "今日水群排名如下:\n"
 					for i := range *records {
 						rank := (*records)[i]
-						msg += fmt.Sprintf("%d. %s, 水群 %d 条消息\n", i+1, rank.Username, rank.Total)
+						if dragon := sender.MemberList.SearchByUserName(1, rank.UID); dragon != nil {
+							msg += fmt.Sprintf("%d. @%s\u2005, 水群 %d 条消息\n", i+1, dragon.First().NickName, rank.Total)
+						} else {
+							msg += fmt.Sprintf("%d. %s, 水群 %d 条消息", i+1, rank.Username, rank.Total)
+						}
 					}
 					msg += "感谢这些水王为本群做出的贡献~"
 					_, _ = ctx.ReplyText(msg)
 				}
 				ctx.Abort()
+			case "插件":
+				if len(commands) == 1 {
+					return
+				}
+				// xxxxxx 指令 参数...
+				subCommands := strings.SplitN(commands[1], " ", 3)
+				if len(subCommands) < 2 {
+					return
+				}
+				if !TOTPVerify(totpSecret, 30, subCommands[0]) {
+					return
+				}
+				if ok, err := PluginManageHandle(subCommands[1:], ctx); err != nil {
+					_, _ = ctx.ReplyText("指令执行出错:" + err.Error())
+					ctx.Abort()
+				} else if ok {
+					ctx.Abort()
+				}
 			default:
-				// TODO 插件机制
-				//if fn, err := LoadPlugin("plugins/test/handler.go"); err == nil {
-				//	res, err := fn(db, ctx)
-				//	if err != nil {
-				//		fmt.Println("调用插件出错")
-				//	} else if res {
-				//		ctx.Abort()
-				//	}
-				//} else {
-				//	fmt.Println("加载插件出错", err)
-				//}
+				// 插件机制
+				if ok, err := InvokePlugin(commands[0], commands[1:], ctx); err != nil {
+					_, _ = ctx.ReplyText("调用插件出错:" + err.Error())
+					ctx.Abort()
+				} else if ok {
+					ctx.Abort()
+				}
+			}
+			if ctx.IsAbort() {
+				_ = ctx.AsRead()
 			}
 		}
 	})

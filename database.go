@@ -121,7 +121,6 @@ type Rank struct {
 func TopN(GID string, limit int) (*[]Rank, error) {
 	date := time.Now().Format(time.DateOnly)
 	ranks := new([]Rank)
-	fmt.Println(GID, date)
 	return ranks, db.Model(&Statistics{}).
 		Select("g_id, uid, username, sum(count) as total").
 		Where("g_id = ? and date = ?", GID, date).
