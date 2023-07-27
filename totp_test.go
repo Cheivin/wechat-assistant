@@ -9,7 +9,7 @@ func TestTOTPToken(t *testing.T) {
 	secret := "MZXW6YTBOI======"
 	ts := 1690428301
 	fmt.Println(ts)
-	token, err := TOTPToken(secret, uint64(ts))
+	token, err := TOTPToken(secret, int64(ts))
 	if err != nil {
 		t.Fatal(err)
 	}

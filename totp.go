@@ -9,14 +9,19 @@ import (
 	"time"
 )
 
-func TOTPToken(secret string, timestamp uint64) (string, error) {
+func TOTPToken(secret string, timestamp int64) (string, error) {
+	return totpToken(secret, 30, timestamp)
+}
+
+func totpToken(secret string, offsetSize int, timestamp int64) (string, error) {
 	key := make([]byte, base32.StdEncoding.DecodedLen(len(secret)))
 	_, err := base32.StdEncoding.Decode(key, []byte(secret))
 	if err != nil {
 		return "", err
 	}
+
 	message := make([]byte, 8)
-	binary.BigEndian.PutUint64(message, timestamp/30)
+	binary.BigEndian.PutUint64(message, uint64(timestamp/int64(offsetSize)))
 	hmacSha1 := hmac.New(sha1.New, key)
 	hmacSha1.Write(message)
 	hash := hmacSha1.Sum([]byte{})
@@ -26,14 +31,9 @@ func TOTPToken(secret string, timestamp uint64) (string, error) {
 }
 
 func TOTPVerify(secret string, offsetSize int, code string) bool {
-	timestamp := uint64(time.Now().Unix())
-	if offsetSize == 0 {
-		verifyCode, _ := TOTPToken(secret, timestamp)
-		return code == verifyCode
-	}
+	timestamp := time.Now().Unix()
 	for i := -offsetSize; i <= offsetSize; i++ {
-		offset := uint64(i)
-		if verifyCode, _ := TOTPToken(secret, (timestamp+offset)*offset); verifyCode == code {
+		if verifyCode, _ := totpToken(secret, offsetSize, timestamp+int64(i)); verifyCode == code {
 			return true
 		}
 	}

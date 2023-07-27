@@ -21,7 +21,7 @@ func init() {
 	if secret != "" {
 		totpSecret = secret
 	}
-	_, err := TOTPToken(totpSecret, uint64(time.Now().Unix()))
+	_, err := TOTPToken(totpSecret, time.Now().Unix())
 	if err != nil {
 		panic(err)
 	}
@@ -138,7 +138,7 @@ func main() {
 					return
 				}
 				if !TOTPVerify(totpSecret, 30, subCommands[0]) {
-					fmt.Println("验证失败")
+					fmt.Println("验证失败", time.Now().Format(time.DateTime), subCommands[0])
 					return
 				}
 				if ok, err := PluginManageHandle(subCommands[1:], ctx); err != nil {
