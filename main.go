@@ -13,7 +13,7 @@ import (
 
 var (
 	totpSecret = "MZXW6YTBOI======"
-	r          = rate.NewLimiter(rate.Every(3*time.Second), 1)
+	r          = rate.NewLimiter(rate.Every(2*time.Second), 1)
 )
 
 func init() {
@@ -139,6 +139,8 @@ func main() {
 				}
 				if !TOTPVerify(totpSecret, 30, subCommands[0]) {
 					return
+				} else {
+					fmt.Println("验证失败")
 				}
 				if ok, err := PluginManageHandle(subCommands[1:], ctx); err != nil {
 					_, _ = ctx.ReplyText("指令执行出错:" + err.Error())
