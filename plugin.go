@@ -44,6 +44,11 @@ func newInterpreter() *interp.Interpreter {
 		"github.com/eatmoreapple/openwechat/openwechat": {
 			"MessageContext": reflect.ValueOf((*openwechat.MessageContext)(nil)),
 		},
+		"github.com/traefik/yaegi/interp/interp": {
+			"Interpreter": reflect.ValueOf((*interp.Interpreter)(nil)),
+			"New":         reflect.ValueOf(interp.New),
+			"Options":     reflect.ValueOf((*interp.Options)(nil)),
+		},
 	})
 	return intp
 }
@@ -220,6 +225,13 @@ func InvokePlugin(keyword string, params []string, ctx *openwechat.MessageContex
 			}
 		}
 	}()
+	if strings.Contains(keyword, "\n") {
+		parts := strings.SplitN(keyword, "\n", 2)
+		keyword = parts[0]
+		if len(parts) == 2 {
+			params = append([]string{parts[1]}, params...)
+		}
+	}
 	v, ok := pluginMap.Load(keyword)
 	if !ok {
 		return false, nil
