@@ -138,9 +138,8 @@ func main() {
 					return
 				}
 				if !TOTPVerify(totpSecret, 30, subCommands[0]) {
-					return
-				} else {
 					fmt.Println("验证失败")
+					return
 				}
 				if ok, err := PluginManageHandle(subCommands[1:], ctx); err != nil {
 					_, _ = ctx.ReplyText("指令执行出错:" + err.Error())
