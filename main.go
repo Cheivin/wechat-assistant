@@ -62,6 +62,7 @@ func main() {
 	}
 
 	dispatcher := openwechat.NewMessageMatchDispatcher()
+	dispatcher.SetAsync(true)
 	dispatcher.OnGroup(func(ctx *openwechat.MessageContext) {
 		if ctx.IsSystem() || !ctx.IsText() || !ctx.IsAt() {
 			return
