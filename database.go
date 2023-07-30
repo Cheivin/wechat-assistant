@@ -57,21 +57,16 @@ func init() {
 		if err != nil {
 			panic(errors.Join(err, errors.New("failed to connect database")))
 		}
-		err = db.Set("gorm:table_options", " DEFAULT CHARSET=utf8mb4").AutoMigrate(Statistics{})
-		if err != nil {
-			panic(errors.Join(err, errors.New("failed to auto migrate table")))
-		}
 	default:
 		db, err = gorm.Open(sqlite.Open(filepath.Join(os.Getenv("DATA"), "data.db")), config)
 		if err != nil {
 			panic(errors.Join(err, errors.New("failed to connect database")))
 		}
-		err = db.AutoMigrate(Statistics{})
-		if err != nil {
-			panic(errors.Join(err, errors.New("failed to auto migrate table")))
-		}
 	}
-
+	err = db.AutoMigrate(Statistics{})
+	if err != nil {
+		panic(errors.Join(err, errors.New("failed to auto migrate table")))
+	}
 }
 
 type Statistics struct {
