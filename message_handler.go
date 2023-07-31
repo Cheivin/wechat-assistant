@@ -11,9 +11,9 @@ import (
 )
 
 var (
-	totpSecret       = "MZXW6YTBOI======"
-	groupLimit       = rate.NewLimiter(rate.Every(2*time.Second), 1)
-	pluginManager, _ = NewPluginManager(db)
+	totpSecret    = "MZXW6YTBOI======"
+	groupLimit    = rate.NewLimiter(rate.Every(2*time.Second), 1)
+	pluginManager *PluginManager
 )
 
 func init() {
@@ -26,6 +26,11 @@ func init() {
 		panic(err)
 	}
 
+	// 插件管理器
+	pluginManager, err = NewPluginManager(db)
+	if err != nil {
+		panic(err)
+	}
 	// 加载初始插件
 	addons, err := pluginManager.ListPlugin(true)
 	if err != nil {
@@ -326,11 +331,35 @@ func plugin(content string, ctx *openwechat.MessageContext) (ok bool, err error)
 }
 
 func Invoke(command string, params []string, ctx *openwechat.MessageContext) (bool, error) {
-	if ok, err := pluginManager.InvokePlugin(command, params, db, ctx); err != nil {
+	// 换行符分隔
+	keyword := command
+	pluginParams := make([]string, 0, len(params))
+	if strings.Contains(command, "\n") {
+		parts := strings.SplitN(command, "\n", 2)
+		keyword = parts[0]
+		if len(parts) == 2 {
+			pluginParams = append(pluginParams, parts[1])
+		}
+		pluginParams = append(pluginParams, params...)
+	} else {
+		if len(params) > 0 {
+			pluginParams = append(pluginParams, params...)
+		}
+	}
+
+	if ok, err := pluginManager.InvokePlugin(keyword, pluginParams, db, ctx); err != nil {
 		_, _ = ctx.ReplyText("调用插件出错:" + err.Error())
 		ctx.Abort()
 		return false, errors.New("调用插件出错:" + err.Error())
+	} else if ok {
+		return true, nil
 	} else {
+		// 尝试调用特殊插件
+		ok, err = pluginManager.InvokePlugin("default", append([]string{command}, params...), db, ctx)
+		if err != nil {
+			// 仅打印，不做特殊处理
+			fmt.Println("调用插件出错:" + err.Error())
+		}
 		return ok, nil
 	}
 }

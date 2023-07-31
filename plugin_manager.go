@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"github.com/eatmoreapple/openwechat"
 	"gorm.io/gorm"
-	"strings"
 	"sync"
+	"wechat-assistant/lock"
 )
 
 type (
@@ -18,16 +18,21 @@ type (
 
 	PluginManager struct {
 		db        *gorm.DB
+		locker    lock.Locker
 		pluginMap sync.Map
 	}
 )
 
 func NewPluginManager(db *gorm.DB) (*PluginManager, error) {
-	err := db.AutoMigrate(Addon{})
+	err := db.AutoMigrate(&Addon{})
 	if err != nil {
 		return nil, err
 	}
-	return &PluginManager{db: db}, nil
+	locker, err := lock.NewDBLocker(db)
+	if err != nil {
+		return nil, err
+	}
+	return &PluginManager{db: db, locker: locker}, nil
 }
 
 func (p *PluginManager) InstallPlugin(pluginPath string) (*Plugin, error) {
@@ -207,13 +212,6 @@ func (p *PluginManager) InvokePlugin(keyword string, params []string, db *gorm.D
 			}
 		}
 	}()
-	if strings.Contains(keyword, "\n") {
-		parts := strings.SplitN(keyword, "\n", 2)
-		keyword = parts[0]
-		if len(parts) == 2 {
-			params = append([]string{parts[1]}, params...)
-		}
-	}
 	v, ok := p.pluginMap.Load(keyword)
 	if !ok {
 		return false, nil
@@ -223,5 +221,6 @@ func (p *PluginManager) InvokePlugin(keyword string, params []string, db *gorm.D
 		return false, nil
 	}
 	ctx.Set("pluginParams", params)
+	ctx.Set("locker", p.locker)
 	return plugin.fn(db, ctx)
 }

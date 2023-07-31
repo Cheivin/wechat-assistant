@@ -7,6 +7,7 @@ import (
 	"github.com/traefik/yaegi/interp"
 	"github.com/traefik/yaegi/stdlib"
 	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"io"
 	"net/http"
 	"os"
@@ -14,6 +15,7 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+	"wechat-assistant/lock"
 )
 
 type Plugin struct {
@@ -30,9 +32,6 @@ func newInterpreter() *interp.Interpreter {
 	interpreter := interp.New(interp.Options{}) // 初始化一个 yaegi 解释器
 	_ = interpreter.Use(stdlib.Symbols)         // 容许脚本调用（简直）所有的 Go 官网 package 代码
 	_ = interpreter.Use(map[string]map[string]reflect.Value{
-		"gorm.io/gorm/gorm": {
-			"DB": reflect.ValueOf((*gorm.DB)(nil)),
-		},
 		"github.com/eatmoreapple/openwechat/openwechat": {
 			"MessageContext": reflect.ValueOf((*openwechat.MessageContext)(nil)),
 		},
@@ -40,6 +39,24 @@ func newInterpreter() *interp.Interpreter {
 			"Interpreter": reflect.ValueOf((*interp.Interpreter)(nil)),
 			"New":         reflect.ValueOf(interp.New),
 			"Options":     reflect.ValueOf((*interp.Options)(nil)),
+		},
+		"wechat-assistant/lock/lock": {
+			"Locker": reflect.ValueOf((*lock.Locker)(nil)),
+		},
+		"gorm.io/gorm/gorm": {
+			"DB":                reflect.ValueOf((*gorm.DB)(nil)),
+			"Session":           reflect.ValueOf((*gorm.Session)(nil)),
+			"ErrRecordNotFound": reflect.ValueOf(gorm.ErrRecordNotFound),
+		},
+		"gorm.io/gorm/clause/clause": {
+			"Clause":     reflect.ValueOf((*clause.Clause)(nil)),
+			"Builder":    reflect.ValueOf((*clause.Builder)(nil)),
+			"Column":     reflect.ValueOf((*clause.Column)(nil)),
+			"Expression": reflect.ValueOf((*clause.Expression)(nil)),
+			"Assignment": reflect.ValueOf((*clause.Assignment)(nil)),
+			"Locking":    reflect.ValueOf((*clause.Locking)(nil)),
+			"Update":     reflect.ValueOf((*clause.Update)(nil)),
+			"Delete":     reflect.ValueOf((*clause.Delete)(nil)),
 		},
 	})
 	return interpreter
