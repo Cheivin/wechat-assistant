@@ -264,7 +264,8 @@ func plugin(content string, ctx *openwechat.MessageContext) (ok bool, err error)
 		if err != nil {
 			return true, errors.New(fmt.Sprintf("解绑插件出错:%s", err.Error()))
 		}
-		return true, err
+		_, _ = ctx.ReplyText("插件解绑成功")
+		return true, nil
 	case "uninstall":
 		if len(commands) == 1 {
 			return false, errors.New("请输入插件ID")
@@ -348,8 +349,6 @@ func Invoke(command string, params []string, ctx *openwechat.MessageContext) (bo
 	}
 
 	if ok, err := pluginManager.InvokePlugin(keyword, pluginParams, db, ctx); err != nil {
-		_, _ = ctx.ReplyText("调用插件出错:" + err.Error())
-		ctx.Abort()
 		return false, errors.New("调用插件出错:" + err.Error())
 	} else if ok {
 		return true, nil
