@@ -92,8 +92,9 @@ func StatisticGroup(msg *openwechat.Message) error {
 		username = user.NickName
 	}
 	record := Statistics{
-		GID:      group.UserName,
-		UID:      user.UserName,
+		GID: group.UserName,
+		//UID:      user.UserName,
+		UID:      fmt.Sprintf("%d", user.AttrStatus),
 		Date:     time.Now().Format(time.DateOnly),
 		Username: username,
 		MsgType:  int(msg.MsgType),
