@@ -95,10 +95,10 @@ func CommandHandler(ctx *openwechat.MessageContext) {
 		var ok bool
 		var err error
 		switch commands[0] {
-		case "龙王":
-			ok, err = dragon(ctx)
-		case "龙王排名":
-			ok, err = dragonRank(ctx)
+		//case "龙王":
+		//	ok, err = dragon(ctx)
+		//case "龙王排名":
+		//	ok, err = dragonRank(ctx)
 		case "插件":
 			if len(commands) == 1 {
 				return
