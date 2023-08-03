@@ -104,6 +104,19 @@ func CommandHandler(ctx *openwechat.MessageContext) {
 				return
 			}
 			ok, err = plugin(commands[1], ctx)
+		case "help":
+			addons, _ := pluginManager.ListPlugin(false)
+			switch len(*addons) {
+			case 0:
+				_, _ = ctx.ReplyText("当前没有加载插件")
+			default:
+				msg := "已加载的插件信息如下:\n"
+				for _, v := range *addons {
+					msg += fmt.Sprintf("[%s]:%s\n", v.BindKeyword, v.Description)
+				}
+				_, _ = ctx.ReplyText(msg)
+			}
+			ok, err = true, nil
 		default:
 			ok, err = Invoke(commands[0], commands[1:], ctx)
 		}
@@ -117,54 +130,6 @@ func CommandHandler(ctx *openwechat.MessageContext) {
 			ctx.Abort()
 			_ = ctx.AsRead()
 		}
-	}
-}
-
-func dragon(ctx *openwechat.MessageContext) (bool, error) {
-	sender, _ := ctx.Sender()
-	records, err := TopN(sender.UserName, 1)
-	if err != nil {
-		return false, errors.New("查询出错啦~")
-	}
-	if len(*records) == 0 {
-		_, _ = ctx.ReplyText("今日龙王还没出现~")
-		return true, nil
-	} else {
-		rank := (*records)[0]
-		dragon := sender.MemberList.SearchByUserName(1, rank.UID)
-		msg := "今天的龙王是->"
-		if dragon != nil {
-			msg += fmt.Sprintf(" @%s\u2005, 水群 %d 条消息", dragon.First().NickName, rank.Total)
-		} else {
-			msg += fmt.Sprintf(" %s, 水群 %d 条消息", rank.Username, rank.Total)
-		}
-		msg += ", 恭喜这个B！！！"
-		_, _ = ctx.ReplyText(msg)
-		return true, nil
-	}
-}
-
-func dragonRank(ctx *openwechat.MessageContext) (bool, error) {
-	sender, _ := ctx.Sender()
-	records, err := TopN(sender.UserName, 10)
-	if err != nil {
-		return false, errors.New("查询出错啦~")
-	} else if len(*records) == 0 {
-		_, _ = ctx.ReplyText("今日龙王排名还未产生~")
-		return true, nil
-	} else {
-		msg := "今日水群排名如下:\n"
-		for i := range *records {
-			rank := (*records)[i]
-			if dragon := sender.MemberList.SearchByUserName(1, rank.UID); dragon != nil {
-				msg += fmt.Sprintf("%d. @%s\u2005, 水群 %d 条消息\n", i+1, dragon.First().NickName, rank.Total)
-			} else {
-				msg += fmt.Sprintf("%d. %s, 水群 %d 条消息\n", i+1, rank.Username, rank.Total)
-			}
-		}
-		msg += "感谢这些水王为本群做出的贡献~"
-		_, _ = ctx.ReplyText(msg)
-		return true, nil
 	}
 }
 
