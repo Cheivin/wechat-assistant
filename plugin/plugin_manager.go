@@ -1,4 +1,4 @@
-package main
+package plugin
 
 import (
 	"errors"
@@ -6,24 +6,25 @@ import (
 	"github.com/eatmoreapple/openwechat"
 	"gorm.io/gorm"
 	"sync"
+	"wechat-assistant/interpreter"
 	"wechat-assistant/lock"
 )
 
 type (
 	Addon struct {
-		*Plugin
+		Info
 		BindKeyword string `` // 绑定的唤醒词
 		Src         string `` // 路径
 	}
 
-	PluginManager struct {
+	Manager struct {
 		db        *gorm.DB
 		locker    lock.Locker
 		pluginMap sync.Map
 	}
 )
 
-func NewPluginManager(db *gorm.DB) (*PluginManager, error) {
+func NewPluginManager(db *gorm.DB) (*Manager, error) {
 	err := db.AutoMigrate(&Addon{})
 	if err != nil {
 		return nil, err
@@ -32,21 +33,21 @@ func NewPluginManager(db *gorm.DB) (*PluginManager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &PluginManager{db: db, locker: locker}, nil
+	return &Manager{db: db, locker: locker}, nil
 }
 
-func (p *PluginManager) InstallPlugin(pluginPath string) (*Plugin, error) {
-	packageName, code, err := getPluginCode(pluginPath)
+func (p *Manager) InstallPlugin(pluginPath string) (Plugin, error) {
+	packageName, code, err := interpreter.GetCode(pluginPath)
 	if err != nil {
 		return nil, err
 	}
-	plugin, err := loadPlugin(packageName, code)
+	plugin, err := NewCodePlugin(packageName, code)
 	if err != nil {
 		return nil, err
 	}
 	// 检查id是否重复
 	record := new(Addon)
-	if err := p.db.Take(record, "id = ?", plugin.ID).Error; err != nil {
+	if err := p.db.Take(record, "id = ?", plugin.ID()).Error; err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("插件安装失败")
 		}
@@ -54,15 +55,15 @@ func (p *PluginManager) InstallPlugin(pluginPath string) (*Plugin, error) {
 		return nil, errors.New("存在同名插件")
 	}
 	if err := p.db.Create(Addon{
-		Plugin: plugin,
-		Src:    pluginPath,
+		Info: plugin.Info(),
+		Src:  pluginPath,
 	}).Error; err != nil {
 		return nil, errors.New("插件安装失败")
 	}
 	return plugin, nil
 }
 
-func (p *PluginManager) ListPlugin(fromDB bool) (*[]Addon, error) {
+func (p *Manager) ListPlugin(fromDB bool) (*[]Addon, error) {
 	var addons []Addon
 	if fromDB {
 		err := p.db.Find(&addons).Error
@@ -71,10 +72,10 @@ func (p *PluginManager) ListPlugin(fromDB bool) (*[]Addon, error) {
 		}
 	} else {
 		p.pluginMap.Range(func(key, value any) bool {
-			if v, ok := value.(*Plugin); ok {
+			if v, ok := value.(Plugin); ok {
 				addons = append(addons, Addon{
 					BindKeyword: key.(string),
-					Plugin:      v,
+					Info:        v.Info(),
 				})
 			}
 			return true
@@ -83,7 +84,7 @@ func (p *PluginManager) ListPlugin(fromDB bool) (*[]Addon, error) {
 	return &addons, nil
 }
 
-func (p *PluginManager) LoadPlugin(id string) (*Plugin, error) {
+func (p *Manager) LoadPlugin(id string) (Plugin, error) {
 	addon := new(Addon)
 	if err := p.db.First(addon, "id = ?", id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -92,10 +93,10 @@ func (p *PluginManager) LoadPlugin(id string) (*Plugin, error) {
 			return nil, errors.New("加载插件出错")
 		}
 	}
-	return loadPlugin(addon.Package, addon.Code)
+	return NewCodePlugin(addon.Package, addon.Code)
 }
 
-func (p *PluginManager) UninstallPlugin(id string) (ok bool, err error) {
+func (p *Manager) UninstallPlugin(id string) (ok bool, err error) {
 	err = p.db.Transaction(func(tx *gorm.DB) error {
 		addon := new(Addon)
 		if err := p.db.First(addon, "id = ?", id).Error; err != nil {
@@ -123,11 +124,9 @@ func (p *PluginManager) UninstallPlugin(id string) (ok bool, err error) {
 	return
 }
 
-func (p *PluginManager) BindPlugin(keyword string, plugin *Plugin, force bool) error {
-	if keyword != "" {
-		plugin.Keyword = keyword
-	}
-	if plugin.Keyword == "" {
+func (p *Manager) BindPlugin(keyword string, plugin Plugin, force bool) error {
+	keyword = plugin.Keyword(keyword)
+	if keyword == "" {
 		return errors.New("插件未绑定唤醒词")
 	}
 
@@ -135,63 +134,64 @@ func (p *PluginManager) BindPlugin(keyword string, plugin *Plugin, force bool) e
 		if force {
 			// 先替换
 			if err := p.db.Model(&Addon{}).
-				Where("bind_keyword = ?", plugin.Keyword).
+				Where("bind_keyword = ?", keyword).
 				Update("bind_keyword", "").
 				Error; err != nil {
 				return errors.New("更新插件信息出错")
 			}
 			// 再配置
 			if err := p.db.Model(&Addon{}).
-				Where("id = ?", plugin.ID).
-				Update("bind_keyword", plugin.Keyword).Error; err != nil {
+				Where("id = ?", plugin.ID()).
+				Update("bind_keyword", keyword).Error; err != nil {
 				return errors.New("绑定插件出错")
 			}
 
 			// 旧插件卸载
-			if v, ok := p.pluginMap.Load(plugin.Keyword); ok {
-				_, _ = destroyPlugin(v.(*Plugin), p.db)
+			if v, ok := p.pluginMap.Load(keyword); ok {
+				_ = v.(Plugin).Destroy(p.db)
 			}
 		} else {
 			if err := p.db.Model(&Addon{}).
-				Where("id = ?", plugin.ID).
-				Update("bind_keyword", plugin.Keyword).Error; err != nil {
+				Where("id = ?", plugin.ID()).
+				Update("bind_keyword", keyword).Error; err != nil {
 				return errors.New("绑定插件出错")
 			}
 
-			actual, loaded := p.pluginMap.LoadOrStore(plugin.Keyword, plugin)
+			actual, loaded := p.pluginMap.LoadOrStore(keyword, plugin)
 			if loaded {
-				if actual.(*Plugin).ID != plugin.ID {
+				if actual.(Plugin).ID() != plugin.ID() {
 					return errors.New(fmt.Sprintf("唤醒词[%s]已被占用,请先卸载或更换唤醒词绑定", keyword))
-				} else if actual.(*Plugin).Code == plugin.Code {
+				} else if actual.(Plugin).HashCode() == plugin.HashCode() {
 					// id相同代码相同同，忽略
 					return nil
 				}
 				// 旧插件卸载
-				_, _ = destroyPlugin(actual.(*Plugin), p.db)
+				_ = actual.(Plugin).Destroy(p.db)
 			}
 		}
 		// 新插件初始化
-		if _, err := initPlugin(plugin, p.db); err != nil {
+		if err := plugin.Init(p.db); err != nil {
 			return errors.New("初始化插件出错")
 		}
+
 		// 存储信息
-		p.pluginMap.Store(plugin.Keyword, plugin)
+		p.pluginMap.Store(keyword, plugin)
 		return nil
 	})
 }
 
-func (p *PluginManager) UnbindPlugin(keyword string) (bool, error) {
+func (p *Manager) UnbindPlugin(keyword string) (bool, error) {
 	plugin, ok := p.pluginMap.LoadAndDelete(keyword)
 	if ok {
 		err := p.db.Transaction(func(tx *gorm.DB) error {
 			err := p.db.Model(&Addon{}).
-				Where("id = ?", plugin.(*Plugin).ID).
+				Where("id = ?", plugin.(Plugin).ID()).
 				Update("bind_keyword", "").
 				Error
 			if err != nil {
 				return errors.New("更新插件信息出错")
 			}
-			_, err = destroyPlugin(plugin.(*Plugin), p.db)
+			err = plugin.(Plugin).Destroy(p.db)
 			return err
 		})
 		return true, err
@@ -199,7 +199,7 @@ func (p *PluginManager) UnbindPlugin(keyword string) (bool, error) {
 	return ok, nil
 }
 
-func (p *PluginManager) InvokePlugin(keyword string, params []string, db *gorm.DB, ctx *openwechat.MessageContext) (ok bool, err error) {
+func (p *Manager) InvokePlugin(keyword string, params []string, db *gorm.DB, ctx *openwechat.MessageContext) (ok bool, err error) {
 	defer func() {
 		if e := recover(); e != nil {
 			switch e.(type) {
@@ -216,11 +216,11 @@ func (p *PluginManager) InvokePlugin(keyword string, params []string, db *gorm.D
 	if !ok {
 		return false, nil
 	}
-	plugin, ok := v.(*Plugin)
+	plugin, ok := v.(Plugin)
 	if !ok {
 		return false, nil
 	}
 	ctx.Set("pluginParams", params)
 	ctx.Set("locker", p.locker)
-	return plugin.fn(db, ctx)
+	return plugin.Handle(db, ctx)
 }

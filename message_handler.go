@@ -8,12 +8,13 @@ import (
 	"os"
 	"strings"
 	"time"
+	plugin2 "wechat-assistant/plugin"
 )
 
 var (
 	totpSecret    = "MZXW6YTBOI======"
 	groupLimit    = rate.NewLimiter(rate.Every(2*time.Second), 1)
-	pluginManager *PluginManager
+	pluginManager *plugin2.Manager
 )
 
 func init() {
@@ -27,7 +28,7 @@ func init() {
 	}
 
 	// 插件管理器
-	pluginManager, err = NewPluginManager(db)
+	pluginManager, err = plugin2.NewPluginManager(db)
 	if err != nil {
 		panic(err)
 	}
@@ -44,12 +45,12 @@ func init() {
 		}
 		plugin, err := pluginManager.LoadPlugin(addon.ID)
 		if err != nil {
-			fmt.Println(fmt.Sprintf("加载插件出错 id:%s, err:%s", plugin.ID, err.Error()))
+			fmt.Println(fmt.Sprintf("加载插件出错 id:%s, err:%s", plugin.ID(), err.Error()))
 		}
 		if err = pluginManager.BindPlugin(addon.BindKeyword, plugin, true); err != nil {
-			fmt.Println(fmt.Sprintf("绑定插件出错 id:%s, bindKeyword:%s, err:%s", plugin.ID, addon.BindKeyword, err.Error()))
+			fmt.Println(fmt.Sprintf("绑定插件出错 id:%s, bindKeyword:%s, err:%s", plugin.ID(), addon.BindKeyword, err.Error()))
 		}
-		fmt.Println(fmt.Sprintf("已启用插件 id:%s, bindKeyword:%s", plugin.ID, addon.BindKeyword))
+		fmt.Println(fmt.Sprintf("已启用插件 id:%s, bindKeyword:%s", plugin.ID(), addon.BindKeyword))
 	}
 }
 
@@ -173,12 +174,13 @@ func plugin(content string, ctx *openwechat.MessageContext) (ok bool, err error)
 		}
 
 		description := "插件安装成功，信息如下:\n"
-		description += "ID:" + plugin.ID + "\n"
-		if plugin.Keyword != "" {
-			description += "默认唤醒词:" + plugin.Keyword + "\n"
+		info := plugin.Info()
+		description += "ID:" + plugin.ID() + "\n"
+		if info.Keyword != "" {
+			description += "默认唤醒词:" + info.Keyword + "\n"
 		}
-		if plugin.Description != "" {
-			description += "说明:" + plugin.Description + "\n"
+		if info.Description != "" {
+			description += "说明:" + info.Description + "\n"
 		}
 		_, _ = ctx.ReplyText(description)
 		return true, nil
@@ -207,13 +209,12 @@ func plugin(content string, ctx *openwechat.MessageContext) (ok bool, err error)
 		}
 		err = pluginManager.BindPlugin(keyword, plugin, force)
 
+		info := plugin.Info()
 		description := "插件绑定成功，信息如下:\n"
-		description += "ID:" + plugin.ID + "\n"
-		if plugin.Keyword != "" {
-			description += "唤醒词:" + plugin.Keyword + "\n"
-		}
-		if plugin.Description != "" {
-			description += "说明:" + plugin.Description + "\n"
+		description += "ID:" + plugin.ID() + "\n"
+		description += "唤醒词:" + info.Keyword + "\n"
+		if info.Description != "" {
+			description += "说明:" + info.Description + "\n"
 		}
 		_, _ = ctx.ReplyText(description)
 		return true, err

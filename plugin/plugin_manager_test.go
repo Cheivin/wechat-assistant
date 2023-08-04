@@ -1,4 +1,4 @@
-package main
+package plugin
 
 import (
 	"fmt"
@@ -15,7 +15,7 @@ import (
 	"time"
 )
 
-func setupManager() (*PluginManager, error) {
+func setupManager() (*Manager, error) {
 	parameters := "charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=true&loc=Asia%2FShanghai"
 	dsn := fmt.Sprintf("assistant:assistant@tcp(172.30.0.1:3306)/assistant?%s", []interface{}{
 		parameters,
@@ -45,11 +45,11 @@ func TestPluginManager_InstallPlugin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plugin, err := manager.InstallPlugin("plugins/demo.go")
+	plugin, err := manager.InstallPlugin("../plugins/demo.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Log(plugin.Keyword, plugin.Description)
+	t.Log(plugin.Info().Keyword, plugin.Info().Description)
 	runtime.GC()
 }
 
@@ -66,11 +66,11 @@ func TestPluginManager_ListPlugin(t *testing.T) {
 		t.Log(addon.ID, addon.BindKeyword, addon.Description)
 	}
 
-	plugin, err := manager.LoadPlugin("test")
+	plugin, err := manager.LoadPlugin("ping")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = manager.BindPlugin(plugin.Keyword, plugin, false); err != nil {
+	if err = manager.BindPlugin(plugin.Keyword(), plugin, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -85,11 +85,11 @@ func TestPluginManager_LoadPlugin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plugin, err := manager.LoadPlugin("test")
+	plugin, err := manager.LoadPlugin("ping")
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Log(plugin.Keyword, plugin.Description)
+	t.Log(plugin.Info().Keyword, plugin.Info().Description)
 	plugin, err = manager.LoadPlugin("test2")
 	if err != nil {
 		t.Fatal(err)
@@ -104,28 +104,29 @@ func TestPluginManager_BindPlugin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plugin, err := manager.LoadPlugin("test")
+	plugin, err := manager.LoadPlugin("ping")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = manager.BindPlugin(plugin.Keyword, plugin, false); err != nil {
+	if err = manager.BindPlugin(plugin.Info().Keyword, plugin, false); err != nil {
 		t.Fatal(err)
 	}
-	if err = manager.BindPlugin("test", plugin, false); err != nil {
+	if err = manager.BindPlugin("ping", plugin, false); err != nil {
 		t.Fatal(err)
 	}
-	if err = manager.BindPlugin("test", plugin, true); err != nil {
+	if err = manager.BindPlugin("ping", plugin, true); err != nil {
 		t.Fatal(err)
 	}
 
-	plugin, _ = manager.LoadPlugin("test")
-	plugin.Code += "\n"
-	if err = manager.BindPlugin("test", plugin, false); err != nil {
+	newPlugin1, _ := NewCodePlugin(plugin.Info().Package, plugin.Info().Code)
+	newPlugin1.info.Code += "\n"
+	if err = manager.BindPlugin("test", newPlugin1, false); err != nil {
 		t.Fatal(err)
 	}
-	plugin, _ = manager.LoadPlugin("test")
-	plugin.ID += "_"
-	if err = manager.BindPlugin("test", plugin, false); err != nil {
+
+	newPlugin2, _ := NewCodePlugin(plugin.Info().Package, plugin.Info().Code+"\n")
+	newPlugin2.info.ID += "_"
+	if err = manager.BindPlugin("test", newPlugin2, false); err != nil {
 		t.Log(err)
 	}
 }
@@ -136,15 +137,15 @@ func TestPluginManager_UninstallPlugin(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	plugin, _ := manager.LoadPlugin("test")
-	_ = manager.BindPlugin(plugin.Keyword, plugin, false)
+	plugin, _ := manager.LoadPlugin("ping")
+	_ = manager.BindPlugin(plugin.Info().Keyword, plugin, false)
 
-	ok, err := manager.UninstallPlugin("test")
+	ok, err := manager.UninstallPlugin("ping")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Log("卸载插件:", ok)
-	ok, err = manager.UninstallPlugin("test")
+	ok, err = manager.UninstallPlugin("ping")
 	if err != nil {
 		t.Fatal(err)
 	}
