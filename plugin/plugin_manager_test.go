@@ -17,7 +17,7 @@ import (
 
 func setupManager() (*Manager, error) {
 	parameters := "charset=utf8mb4&collation=utf8mb4_unicode_ci&parseTime=true&loc=Asia%2FShanghai"
-	dsn := fmt.Sprintf("assistant:assistant@tcp(172.30.0.1:3306)/assistant?%s", []interface{}{
+	dsn := fmt.Sprintf("assistant_test:assistant@tcp(172.30.0.1:3306)/assistant_test?%s", []interface{}{
 		parameters,
 	}...)
 	// 配置数据库
