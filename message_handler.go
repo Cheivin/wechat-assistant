@@ -28,29 +28,9 @@ func init() {
 	}
 
 	// 插件管理器
-	pluginManager, err = plugin2.NewPluginManager(db)
+	pluginManager, err = plugin2.NewManager(db)
 	if err != nil {
 		panic(err)
-	}
-	// 加载初始插件
-	addons, err := pluginManager.ListPlugin(true)
-	if err != nil {
-		panic(err)
-	}
-	for i := range *addons {
-		addon := (*addons)[i]
-		// 未绑定的忽略掉
-		if addon.BindKeyword == "" {
-			continue
-		}
-		plugin, err := pluginManager.LoadPlugin(addon.ID)
-		if err != nil {
-			fmt.Println(fmt.Sprintf("加载插件出错 id:%s, err:%s", plugin.ID(), err.Error()))
-		}
-		if err = pluginManager.BindPlugin(addon.BindKeyword, plugin, true); err != nil {
-			fmt.Println(fmt.Sprintf("绑定插件出错 id:%s, bindKeyword:%s, err:%s", plugin.ID(), addon.BindKeyword, err.Error()))
-		}
-		fmt.Println(fmt.Sprintf("已启用插件 id:%s, bindKeyword:%s", plugin.ID(), addon.BindKeyword))
 	}
 }
 
@@ -106,7 +86,7 @@ func CommandHandler(ctx *openwechat.MessageContext) {
 			}
 			ok, err = plugin(commands[1], ctx)
 		case "help":
-			addons, _ := pluginManager.ListPlugin(false)
+			addons, _ := pluginManager.List(false)
 			switch len(*addons) {
 			case 0:
 				_, _ = ctx.ReplyText("当前没有加载插件")
@@ -168,7 +148,7 @@ func plugin(content string, ctx *openwechat.MessageContext) (ok bool, err error)
 			pluginPath = params[0]
 		}
 
-		plugin, err := pluginManager.InstallPlugin(pluginPath)
+		plugin, err := pluginManager.Install(pluginPath)
 		if err != nil {
 			return false, errors.New("安装插件出错:" + err.Error())
 		}
@@ -183,6 +163,22 @@ func plugin(content string, ctx *openwechat.MessageContext) (ok bool, err error)
 			description += "说明:" + info.Description + "\n"
 		}
 		_, _ = ctx.ReplyText(description)
+		return true, nil
+	case "update":
+		if len(commands) == 1 {
+			return false, errors.New("更新插件出错:请输入插件ID")
+		}
+		params := strings.SplitN(commands[1], " ", 3)
+		id := params[0]
+		pluginPath := ""
+		if len(params) > 1 {
+			pluginPath = params[1]
+		}
+		err := pluginManager.Update(id, pluginPath)
+		if err != nil {
+			return false, errors.New("更新插件出错:" + err.Error())
+		}
+		_, _ = ctx.ReplyText(fmt.Sprintf("插件%s更新完成", id))
 		return true, nil
 	case "bind":
 		if len(commands) == 1 {
@@ -203,11 +199,11 @@ func plugin(content string, ctx *openwechat.MessageContext) (ok bool, err error)
 			keyword = params[1]
 			force = "force" == params[2]
 		}
-		plugin, err := pluginManager.LoadPlugin(id)
+		plugin, err := pluginManager.Load(id)
 		if err != nil {
 			return false, err
 		}
-		err = pluginManager.BindPlugin(keyword, plugin, force)
+		err = pluginManager.Bind(keyword, plugin, force)
 
 		info := plugin.Info()
 		description := "插件绑定成功，信息如下:\n"
@@ -223,7 +219,7 @@ func plugin(content string, ctx *openwechat.MessageContext) (ok bool, err error)
 			return false, errors.New("解绑插件出错:请输入唤醒词")
 		}
 		keyword := strings.SplitN(commands[1], " ", 2)[0]
-		ok, err := pluginManager.UnbindPlugin(keyword)
+		ok, err := pluginManager.Unbind(keyword)
 		if !ok {
 			return true, errors.New(fmt.Sprintf("解绑插件出错:唤醒词[%s]未绑定插件", keyword))
 		}
@@ -232,12 +228,23 @@ func plugin(content string, ctx *openwechat.MessageContext) (ok bool, err error)
 		}
 		_, _ = ctx.ReplyText("插件解绑成功")
 		return true, nil
+	case "reload":
+		if len(commands) == 1 {
+			return false, errors.New("重载插件出错:请输入插件ID")
+		}
+		params := strings.SplitN(commands[1], " ", 2)
+		id := params[0]
+		if err := pluginManager.Reload(id); err != nil {
+			return false, errors.New("重载插件出错:" + err.Error())
+		}
+		_, _ = ctx.ReplyText(fmt.Sprintf("插件%s重载完成", id))
+		return true, nil
 	case "uninstall":
 		if len(commands) == 1 {
 			return false, errors.New("请输入插件ID")
 		}
 		id := strings.SplitN(commands[1], " ", 2)[0]
-		if ok, err := pluginManager.UninstallPlugin(id); err != nil {
+		if ok, err := pluginManager.Uninstall(id); err != nil {
 			return false, errors.New("卸载插件出错:" + err.Error())
 		} else if ok {
 			_, _ = ctx.ReplyText("插件卸载成功")
@@ -251,7 +258,7 @@ func plugin(content string, ctx *openwechat.MessageContext) (ok bool, err error)
 			fromDB = "installed" == strings.SplitN(commands[1], " ", 2)[0]
 		}
 		if fromDB {
-			addons, err := pluginManager.ListPlugin(fromDB)
+			addons, err := pluginManager.List(fromDB)
 			if err != nil {
 				return false, errors.New("查询已安装的插件列表出错")
 			}
@@ -280,7 +287,7 @@ func plugin(content string, ctx *openwechat.MessageContext) (ok bool, err error)
 			}
 			return true, nil
 		} else {
-			addons, _ := pluginManager.ListPlugin(fromDB)
+			addons, _ := pluginManager.List(fromDB)
 			switch len(*addons) {
 			case 0:
 				_, _ = ctx.ReplyText("当前没有加载插件")
@@ -314,13 +321,13 @@ func Invoke(command string, params []string, ctx *openwechat.MessageContext) (bo
 		}
 	}
 
-	if ok, err := pluginManager.InvokePlugin(keyword, pluginParams, db, ctx); err != nil {
+	if ok, err := pluginManager.Invoke(keyword, pluginParams, db, ctx); err != nil {
 		return false, errors.New("调用插件出错:" + err.Error())
 	} else if ok {
 		return true, nil
 	} else {
 		// 尝试调用特殊插件
-		ok, err = pluginManager.InvokePlugin("default", append([]string{command}, params...), db, ctx)
+		ok, err = pluginManager.Invoke("default", append([]string{command}, params...), db, ctx)
 		if err != nil {
 			// 仅打印，不做特殊处理
 			fmt.Println("调用插件出错:" + err.Error())

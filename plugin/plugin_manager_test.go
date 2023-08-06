@@ -37,15 +37,15 @@ func setupManager() (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewPluginManager(db)
+	return NewManager(db)
 }
 
-func TestPluginManager_InstallPlugin(t *testing.T) {
+func TestPluginManager_Install(t *testing.T) {
 	manager, err := setupManager()
 	if err != nil {
 		t.Fatal(err)
 	}
-	plugin, err := manager.InstallPlugin("../plugins/demo.go")
+	plugin, err := manager.Install("../plugins/demo.go")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,44 +53,28 @@ func TestPluginManager_InstallPlugin(t *testing.T) {
 	runtime.GC()
 }
 
-func TestPluginManager_ListPlugin(t *testing.T) {
+func TestPluginManager_Update(t *testing.T) {
 	manager, err := setupManager()
 	if err != nil {
 		t.Fatal(err)
 	}
-	addons, err := manager.ListPlugin(true)
+	err = manager.Update("ping", "../plugins/demo2.go")
 	if err != nil {
 		t.Fatal(err)
-	}
-	for _, addon := range *addons {
-		t.Log(addon.ID, addon.BindKeyword, addon.Description)
-	}
-
-	plugin, err := manager.LoadPlugin("ping")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = manager.BindPlugin(plugin.Keyword(), plugin, false); err != nil {
-		t.Fatal(err)
-	}
-
-	addons, _ = manager.ListPlugin(false)
-	for _, addon := range *addons {
-		t.Log(addon.ID, addon.BindKeyword, addon.Description)
 	}
 }
 
-func TestPluginManager_LoadPlugin(t *testing.T) {
+func TestPluginManager_Load(t *testing.T) {
 	manager, err := setupManager()
 	if err != nil {
 		t.Fatal(err)
 	}
-	plugin, err := manager.LoadPlugin("ping")
+	plugin, err := manager.Load("ping")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Log(plugin.Info().Keyword, plugin.Info().Description)
-	plugin, err = manager.LoadPlugin("test2")
+	plugin, err = manager.Load("test2")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,53 +83,77 @@ func TestPluginManager_LoadPlugin(t *testing.T) {
 	}
 }
 
-func TestPluginManager_BindPlugin(t *testing.T) {
+func TestPluginManager_Bind(t *testing.T) {
 	manager, err := setupManager()
 	if err != nil {
 		t.Fatal(err)
 	}
-	plugin, err := manager.LoadPlugin("ping")
+	plugin, err := manager.Load("ping")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = manager.BindPlugin(plugin.Info().Keyword, plugin, false); err != nil {
+	if err = manager.Bind(plugin.Info().Keyword, plugin, false); err != nil {
 		t.Fatal(err)
 	}
-	if err = manager.BindPlugin("ping", plugin, false); err != nil {
+	if err = manager.Bind("ping2", plugin, false); err != nil {
 		t.Fatal(err)
 	}
-	if err = manager.BindPlugin("ping", plugin, true); err != nil {
+	if err = manager.Bind("ping2", plugin, true); err != nil {
 		t.Fatal(err)
-	}
-
-	newPlugin1, _ := NewCodePlugin(plugin.Info().Package, plugin.Info().Code)
-	newPlugin1.info.Code += "\n"
-	if err = manager.BindPlugin("test", newPlugin1, false); err != nil {
-		t.Fatal(err)
-	}
-
-	newPlugin2, _ := NewCodePlugin(plugin.Info().Package, plugin.Info().Code+"\n")
-	newPlugin2.info.ID += "_"
-	if err = manager.BindPlugin("test", newPlugin2, false); err != nil {
-		t.Log(err)
 	}
 }
 
-func TestPluginManager_UninstallPlugin(t *testing.T) {
+func TestPluginManager_Unbind(t *testing.T) {
+	manager, err := setupManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ok, err := manager.Unbind("ping3"); err != nil {
+		t.Fatal(err)
+	} else {
+		t.Log("解绑:", ok)
+	}
+	if ok, err := manager.Unbind("ping2"); err != nil {
+		t.Fatal(err)
+	} else {
+		t.Log("解绑:", ok)
+	}
+}
+
+func TestPluginManager_List(t *testing.T) {
+	manager, err := setupManager()
+	if err != nil {
+		t.Fatal(err)
+	}
+	addons, err := manager.List(true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, addon := range *addons {
+		t.Log("FromDB", addon.ID, addon.BindKeyword, addon.Description)
+	}
+
+	addons, _ = manager.List(false)
+	for _, addon := range *addons {
+		t.Log("FromLoaded", addon.ID, addon.BindKeyword, addon.Description)
+	}
+}
+
+func TestPluginManager_Uninstall(t *testing.T) {
 	manager, err := setupManager()
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	plugin, _ := manager.LoadPlugin("ping")
-	_ = manager.BindPlugin(plugin.Info().Keyword, plugin, false)
+	plugin, _ := manager.Load("ping")
+	_ = manager.Bind(plugin.Info().Keyword, plugin, false)
 
-	ok, err := manager.UninstallPlugin("ping")
+	ok, err := manager.Uninstall("ping")
 	if err != nil {
 		t.Fatal(err)
 	}
 	t.Log("卸载插件:", ok)
-	ok, err = manager.UninstallPlugin("ping")
+	ok, err = manager.Uninstall("ping")
 	if err != nil {
 		t.Fatal(err)
 	}

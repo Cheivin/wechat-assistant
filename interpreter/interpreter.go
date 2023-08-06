@@ -27,6 +27,14 @@ func newInterpreter() *interp.Interpreter {
 	_ = interpreter.Use(map[string]map[string]reflect.Value{
 		"github.com/eatmoreapple/openwechat/openwechat": {
 			"MessageContext": reflect.ValueOf((*openwechat.MessageContext)(nil)),
+			"Bot":            reflect.ValueOf((*openwechat.Bot)(nil)),
+			"Self":           reflect.ValueOf((*openwechat.Self)(nil)),
+			"User":           reflect.ValueOf((*openwechat.User)(nil)),
+			"Members":        reflect.ValueOf((*openwechat.Members)(nil)),
+			"Group":          reflect.ValueOf((*openwechat.Group)(nil)),
+			"Groups":         reflect.ValueOf((*openwechat.Groups)(nil)),
+			"Friend":         reflect.ValueOf((*openwechat.Friend)(nil)),
+			"Friends":        reflect.ValueOf((*openwechat.Friends)(nil)),
 		},
 		"github.com/traefik/yaegi/interp/interp": {
 			"Interpreter": reflect.ValueOf((*interp.Interpreter)(nil)),

@@ -7,11 +7,11 @@ import (
 
 type (
 	Info struct {
-		ID          string `gorm:"primary"` // 插件id
-		Package     string ``               // 包名
-		Code        string ``               // 加载内容
-		Keyword     string ``               // 唤醒词
-		Description string ``               // 描述
+		ID          string `gorm:"primaryKey"` // 插件id
+		Package     string ``                  // 包名
+		Code        string ``                  // 加载内容
+		Keyword     string ``                  // 唤醒词
+		Description string ``                  // 描述
 	}
 
 	Plugin interface {

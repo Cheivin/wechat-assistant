@@ -35,7 +35,6 @@ func main() {
 	// 获取所有的好友
 	friends, err := self.Friends()
 	fmt.Println(friends, err)
-
 	// 获取所有的群组
 	groups, err := self.Groups()
 	for _, g := range groups.AsMembers() {
