@@ -304,7 +304,7 @@ func (m *Manager) Unbind(keyword string) (bool, error) {
 				Delete(&AddonBind{}).
 				Error
 			if err != nil {
-				return errors.New("更新插件信息出错")
+				return errors.New("解绑插件信息出错")
 			}
 			delete(m.bindMap, keyword)
 			m.recycle()

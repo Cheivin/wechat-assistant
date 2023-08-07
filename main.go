@@ -6,6 +6,13 @@ import (
 	"github.com/mdp/qrterminal/v3"
 	"os"
 	"path/filepath"
+	plugin2 "wechat-assistant/plugin"
+	"wechat-assistant/schedule"
+)
+
+var (
+	pluginManager *plugin2.Manager
+	taskManager   *schedule.Manager
 )
 
 func main() {
@@ -39,6 +46,16 @@ func main() {
 	groups, err := self.Groups()
 	for _, g := range groups.AsMembers() {
 		fmt.Println("群:", g.NickName, g.DisplayName)
+	}
+
+	// 插件管理器
+	pluginManager, err = plugin2.NewManager(db)
+	if err != nil {
+		panic(err)
+	}
+	taskManager, err = schedule.NewManager(db, bot)
+	if err != nil {
+		panic(err)
 	}
 
 	dispatcher := openwechat.NewMessageMatchDispatcher()
