@@ -29,29 +29,39 @@ type (
 		cron.EntryID
 		Description string
 	}
-
-	Manager struct {
-		db      *gorm.DB
-		bot     *openwechat.Bot
-		c       *cron.Cron
-		mutex   sync.RWMutex
-		loaded  map[string]TaskHandler
-		bindMap map[string][]BindInfo
-	}
 )
 
-func NewManager(db *gorm.DB, bot *openwechat.Bot) (*Manager, error) {
-	err := db.AutoMigrate(&Task{}, &Schedule{})
-	if err != nil {
-		return nil, err
+type Manager struct {
+	DB      *gorm.DB        `aware:"db"`
+	Bot     *openwechat.Bot `aware:"bot"`
+	c       *cron.Cron
+	mutex   sync.RWMutex
+	loaded  map[string]TaskHandler
+	bindMap map[string][]BindInfo
+}
+
+func (m *Manager) BeanName() string {
+	return "scheduleManager"
+}
+
+func (m *Manager) BeanConstruct() {
+	m.c = cron.New(cron.WithSeconds(), cron.WithLogger(cron.DefaultLogger))
+	m.loaded = map[string]TaskHandler{}
+	m.bindMap = map[string][]BindInfo{}
+}
+
+func (m *Manager) AfterPropertiesSet() {
+	if err := m.DB.AutoMigrate(&Task{}, &Schedule{}); err != nil {
+		panic(err)
 	}
-	m := &Manager{db: db, bot: bot, c: cron.New(cron.WithSeconds(), cron.WithLogger(cron.DefaultLogger)), loaded: make(map[string]TaskHandler), bindMap: make(map[string][]BindInfo)}
-	return m, m.init()
+	if err := m.init(); err != nil {
+		panic(err)
+	}
 }
 
 func (m *Manager) init() error {
 	var records []Schedule
-	if err := m.db.Find(&records).Error; err != nil {
+	if err := m.DB.Find(&records).Error; err != nil {
 		return err
 	}
 	if len(records) == 0 {
@@ -77,7 +87,7 @@ func (m *Manager) init() error {
 		fmt.Println(fmt.Sprintf("载入任务 ID:%d, 任务ID:%s, 目标位置:%s", schedule.ID, schedule.TaskID, schedule.Target))
 	}
 	var tasks []Task
-	if err := m.db.Find(&tasks, ids).Error; err != nil {
+	if err := m.DB.Find(&tasks, ids).Error; err != nil {
 		return err
 	}
 	for _, task := range tasks {
@@ -96,11 +106,11 @@ func (m *Manager) job(id string, target string) func() {
 		handler, ok := m.loaded[id]
 		if ok {
 			ctx := context.WithValue(context.TODO(), "target", target)
-			if m.bot != nil {
-				self, _ := m.bot.GetCurrentUser()
-				_ = handler.Handle(ctx, m.db, self)
+			if m.Bot != nil {
+				self, _ := m.Bot.GetCurrentUser()
+				_ = handler.Handle(ctx, m.DB, self)
 			} else {
-				_ = handler.Handle(ctx, m.db, nil)
+				_ = handler.Handle(ctx, m.DB, nil)
 			}
 		}
 	}
@@ -117,14 +127,14 @@ func (m *Manager) Install(codePath string) (TaskHandler, error) {
 	}
 	// 检查id是否重复
 	record := new(Task)
-	if err := m.db.Take(record, "id = ?", handler.ID()).Error; err != nil {
+	if err := m.DB.Take(record, "id = ?", handler.ID()).Error; err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("定时任务安装失败")
 		}
 	} else if record != nil {
 		return nil, errors.New("存在同名定时任务")
 	}
-	if err := m.db.Create(Task{
+	if err := m.DB.Create(Task{
 		Info: handler.Info(),
 		Src:  codePath,
 	}).Error; err != nil {
@@ -135,7 +145,7 @@ func (m *Manager) Install(codePath string) (TaskHandler, error) {
 
 func (m *Manager) Update(id string, src string) error {
 	task := new(Task)
-	if err := m.db.First(task, "id = ?", id).Error; err != nil {
+	if err := m.DB.First(task, "id = ?", id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return errors.New(fmt.Sprintf("任务%s不存在", id))
 		} else {
@@ -154,12 +164,12 @@ func (m *Manager) Update(id string, src string) error {
 		return err
 	}
 	task.Info = handler.Info()
-	return m.db.Save(task).Error
+	return m.DB.Save(task).Error
 }
 
 func (m *Manager) Load(id string) (TaskHandler, error) {
 	record := new(Task)
-	if err := m.db.First(record, "id = ?", id).Error; err != nil {
+	if err := m.DB.First(record, "id = ?", id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		} else {
@@ -173,11 +183,11 @@ func (m *Manager) List(target string, fromDB bool) (*[]BindInfo, error) {
 	bindInfos := make([]BindInfo, 0, len(m.bindMap))
 	if fromDB {
 		var tasks []Task
-		if err := m.db.Find(&tasks).Error; err != nil {
+		if err := m.DB.Find(&tasks).Error; err != nil {
 			return nil, err
 		}
 		var schedules []Schedule
-		if err := m.db.Find(&schedules).Error; err != nil {
+		if err := m.DB.Find(&schedules).Error; err != nil {
 			return nil, err
 		}
 
@@ -228,14 +238,14 @@ func (m *Manager) Bind(handler TaskHandler, spec string, target string) error {
 	if loaded { // 如果已加载，使用旧实例替换
 		handler = old
 	}
-	if err := m.db.Transaction(func(tx *gorm.DB) error {
+	if err := m.DB.Transaction(func(tx *gorm.DB) error {
 		// 添加绑定关系
 		schedule := Schedule{
 			TaskID: handler.ID(),
 			Target: target,
 			Spec:   spec,
 		}
-		if err := m.db.Create(&schedule).Error; err != nil {
+		if err := m.DB.Create(&schedule).Error; err != nil {
 			return errors.New("绑定定时任务出错")
 		}
 
@@ -299,8 +309,8 @@ search:
 	}
 
 	if ok {
-		err := m.db.Transaction(func(tx *gorm.DB) error {
-			err := m.db.Where("id = ?", bindInfo.ID).
+		err := m.DB.Transaction(func(tx *gorm.DB) error {
+			err := m.DB.Where("id = ?", bindInfo.ID).
 				Delete(&Schedule{}).
 				Error
 			if err != nil {
@@ -333,10 +343,10 @@ func (m *Manager) Uninstall(id string) (ok bool, err error) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	err = m.db.Transaction(func(tx *gorm.DB) error {
+	err = m.DB.Transaction(func(tx *gorm.DB) error {
 		// 查找任务信息
 		task := new(Task)
-		if err := m.db.First(task, "id = ?", id).Error; err != nil {
+		if err := m.DB.First(task, "id = ?", id).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return nil
 			} else {
@@ -346,11 +356,11 @@ func (m *Manager) Uninstall(id string) (ok bool, err error) {
 			return nil
 		}
 		// 删除任务和绑定
-		result := m.db.Delete(task)
+		result := m.DB.Delete(task)
 		if result.Error != nil {
 			return result.Error
 		}
-		if err := m.db.Where("task_id = ?", task.ID).Delete(&Schedule{}).Error; err != nil {
+		if err := m.DB.Where("task_id = ?", task.ID).Delete(&Schedule{}).Error; err != nil {
 			return errors.New("卸载插件出错")
 		}
 		// 移除任务

@@ -3,7 +3,9 @@ package plugin
 import (
 	"errors"
 	"fmt"
+	"github.com/cheivin/di"
 	"github.com/eatmoreapple/openwechat"
+	"github.com/go-resty/resty/v2"
 	"gorm.io/gorm"
 	"sync"
 	"wechat-assistant/interpreter"
@@ -27,33 +29,40 @@ type (
 		ID      string `gorm:"primaryKey"` // 插件id
 		Keyword string `gorm:"primaryKey"` // 唤醒词
 	}
-
-	Manager struct {
-		db      *gorm.DB
-		locker  lock.Locker
-		mutex   sync.RWMutex
-		loaded  map[string]Plugin // 已加载的插件
-		bindMap map[string]string // 映射关系
-	}
 )
 
-func NewManager(db *gorm.DB) (*Manager, error) {
-	err := db.AutoMigrate(&Addon{}, &AddonBind{})
-	if err != nil {
-		return nil, err
+type Manager struct {
+	container di.DI
+	DB        *gorm.DB      `aware:"db"`
+	Locker    lock.Locker   `aware:""`
+	Resty     *resty.Client `aware:"resty"`
+	mutex     sync.RWMutex
+	loaded    map[string]Plugin // 已加载的插件
+	bindMap   map[string]string // 映射关系
+}
+
+func (m *Manager) BeanName() string {
+	return "pluginManager"
+}
+
+func (m *Manager) BeanConstruct(container di.DI) {
+	m.container = container
+	m.loaded = map[string]Plugin{}
+	m.bindMap = map[string]string{}
+}
+
+func (m *Manager) AfterPropertiesSet() {
+	if err := m.DB.AutoMigrate(&Addon{}, &AddonBind{}); err != nil {
+		panic(err)
 	}
-	locker, err := lock.NewDBLocker(db)
-	if err != nil {
-		return nil, err
+	if err := m.init(); err != nil {
+		panic(err)
 	}
-	m := &Manager{db: db, locker: locker, loaded: map[string]Plugin{}, bindMap: map[string]string{}}
-	// 初始化
-	return m, m.init()
 }
 
 func (m *Manager) init() error {
 	var records []AddonBind
-	if err := m.db.Find(&records).Error; err != nil {
+	if err := m.DB.Find(&records).Error; err != nil {
 		return err
 	}
 	if len(records) == 0 {
@@ -66,14 +75,14 @@ func (m *Manager) init() error {
 		fmt.Println(fmt.Sprintf("已启用插件 ID:%s, bindKeyword:%s", bind.ID, bind.Keyword))
 	}
 	var addons []Addon
-	if err := m.db.Find(&addons, ids).Error; err != nil {
+	if err := m.DB.Find(&addons, ids).Error; err != nil {
 		return err
 	}
 	for _, addon := range addons {
 		plugin, err := NewCodePlugin(addon.Package, addon.Code)
 		if err != nil {
 			return err
-		} else if err := plugin.Init(m.db); err != nil {
+		} else if err := plugin.Init(m.DB); err != nil {
 			return err
 		} else {
 			m.loaded[addon.ID] = plugin
@@ -116,7 +125,7 @@ func (m *Manager) recycle() {
 	// 回收销毁插件
 	for _, id := range unbindId {
 		plugin := m.loaded[id]
-		_ = plugin.Destroy(m.db)
+		_ = plugin.Destroy(m.DB)
 		delete(m.loaded, id)
 	}
 }
@@ -132,14 +141,14 @@ func (m *Manager) Install(pluginPath string) (Plugin, error) {
 	}
 	// 检查id是否重复
 	record := new(Addon)
-	if err := m.db.Take(record, "id = ?", plugin.ID()).Error; err != nil {
+	if err := m.DB.Take(record, "id = ?", plugin.ID()).Error; err != nil {
 		if !errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, errors.New("插件安装失败")
 		}
 	} else if record != nil {
 		return nil, errors.New("存在同名插件")
 	}
-	if err := m.db.Create(Addon{
+	if err := m.DB.Create(Addon{
 		Info: plugin.Info(),
 		Src:  pluginPath,
 	}).Error; err != nil {
@@ -150,7 +159,7 @@ func (m *Manager) Install(pluginPath string) (Plugin, error) {
 
 func (m *Manager) Update(id string, src string) error {
 	addon := new(Addon)
-	if err := m.db.First(addon, "id = ?", id).Error; err != nil {
+	if err := m.DB.First(addon, "id = ?", id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return errors.New(fmt.Sprintf("插件%s不存在", id))
 		} else {
@@ -166,12 +175,12 @@ func (m *Manager) Update(id string, src string) error {
 	}
 	addon.Package = packageName
 	addon.Code = code
-	return m.db.Save(addon).Error
+	return m.DB.Save(addon).Error
 }
 
 func (m *Manager) Load(id string) (Plugin, error) {
 	addon := new(Addon)
-	if err := m.db.First(addon, "id = ?", id).Error; err != nil {
+	if err := m.DB.First(addon, "id = ?", id).Error; err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
 			return nil, nil
 		} else {
@@ -185,11 +194,11 @@ func (m *Manager) List(fromDB bool) (*[]BindInfo, error) {
 	bindInfos := make([]BindInfo, 0, len(m.bindMap))
 	if fromDB {
 		var addons []Addon
-		if err := m.db.Find(&addons).Error; err != nil {
+		if err := m.DB.Find(&addons).Error; err != nil {
 			return nil, err
 		}
 		var binds []AddonBind
-		if err := m.db.Find(&binds).Error; err != nil {
+		if err := m.DB.Find(&binds).Error; err != nil {
 			return nil, err
 		}
 		for i := range addons {
@@ -240,16 +249,16 @@ func (m *Manager) Bind(keyword string, plugin Plugin, force bool) error {
 		return errors.New(fmt.Sprintf("唤醒词[%s]已被占用,请先卸载或更换唤醒词绑定", keyword))
 	}
 
-	if err := m.db.Transaction(func(tx *gorm.DB) error {
+	if err := m.DB.Transaction(func(tx *gorm.DB) error {
 		// 如果已绑定，先清除原有绑定关系
 		if bound {
-			err := m.db.Where("id = ? and keyword = ?", bindId, keyword).Delete(&AddonBind{}).Error
+			err := m.DB.Where("id = ? and keyword = ?", bindId, keyword).Delete(&AddonBind{}).Error
 			if err != nil {
 				return errors.New("更新插件信息出错")
 			}
 		}
 		// 添加新的绑定关系
-		if err := m.db.Create(AddonBind{
+		if err := m.DB.Create(AddonBind{
 			ID:      plugin.ID(),
 			Keyword: keyword,
 		}).Error; err != nil {
@@ -258,7 +267,7 @@ func (m *Manager) Bind(keyword string, plugin Plugin, force bool) error {
 
 		// 未加载过的插件需要初始化
 		if !loaded {
-			if err := plugin.Init(m.db); err != nil {
+			if err := plugin.Init(m.DB); err != nil {
 				// 撤销绑定和加载
 				return errors.New("初始化插件出错")
 			}
@@ -299,8 +308,8 @@ func (m *Manager) Unbind(keyword string) (bool, error) {
 
 	bindId, ok := m.bindMap[keyword]
 	if ok {
-		err := m.db.Transaction(func(tx *gorm.DB) error {
-			err := m.db.Where("id = ? and keyword = ?", bindId, keyword).
+		err := m.DB.Transaction(func(tx *gorm.DB) error {
+			err := m.DB.Where("id = ? and keyword = ?", bindId, keyword).
 				Delete(&AddonBind{}).
 				Error
 			if err != nil {
@@ -319,10 +328,10 @@ func (m *Manager) Uninstall(id string) (ok bool, err error) {
 	m.mutex.Lock()
 	defer m.mutex.Unlock()
 
-	err = m.db.Transaction(func(tx *gorm.DB) error {
+	err = m.DB.Transaction(func(tx *gorm.DB) error {
 		// 查找插件信息
 		addon := new(Addon)
-		if err := m.db.First(addon, "id = ?", id).Error; err != nil {
+		if err := m.DB.First(addon, "id = ?", id).Error; err != nil {
 			if errors.Is(err, gorm.ErrRecordNotFound) {
 				return nil
 			} else {
@@ -332,11 +341,11 @@ func (m *Manager) Uninstall(id string) (ok bool, err error) {
 			return nil
 		}
 		// 删除插件和绑定
-		result := m.db.Delete(addon)
+		result := m.DB.Delete(addon)
 		if result.Error != nil {
 			return result.Error
 		}
-		if err := m.db.Where("id = ?", addon.ID).Delete(&AddonBind{}).Error; err != nil {
+		if err := m.DB.Where("id = ?", addon.ID).Delete(&AddonBind{}).Error; err != nil {
 			return errors.New("卸载插件出错")
 		}
 
@@ -390,6 +399,8 @@ func (m *Manager) Invoke(keyword string, params []string, db *gorm.DB, ctx *open
 		return false, nil
 	}
 	ctx.Set("pluginParams", params)
-	ctx.Set("locker", m.locker)
+	ctx.Set("di", m.container)
+	ctx.Set("locker", m.Locker)
+	ctx.Set("resty", m.Resty)
 	return plugin.Handle(db, ctx)
 }

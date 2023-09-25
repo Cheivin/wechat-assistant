@@ -2,10 +2,8 @@ package plugin
 
 import (
 	"fmt"
-	_ "github.com/eatmoreapple/openwechat"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
-	_ "gorm.io/gorm"
 	"gorm.io/gorm/logger"
 	"gorm.io/gorm/schema"
 	"log"
@@ -37,7 +35,10 @@ func setupManager() (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewManager(db)
+	manager := &Manager{DB: db}
+	manager.BeanConstruct()
+	manager.AfterPropertiesSet()
+	return manager, nil
 }
 
 func TestPluginManager_Install(t *testing.T) {

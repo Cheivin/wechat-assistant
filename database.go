@@ -3,24 +3,48 @@ package main
 import (
 	"errors"
 	"fmt"
-	"github.com/eatmoreapple/openwechat"
+	"github.com/cheivin/di"
 	"github.com/glebarez/sqlite"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
 	"gorm.io/gorm/logger"
 	"gorm.io/gorm/schema"
 	"log"
 	"os"
-	"path/filepath"
 	"time"
 )
 
-var db *gorm.DB
+type (
+	dbSqliteProperty struct {
+		File string `value:"file"` // 数据库文件路径
+	}
+	dbMysqlProperty struct {
+		Host       string `value:"host"`
+		Port       int    `value:"port"`
+		Username   string `value:"username"`
+		Password   string `value:"password"`
+		Database   string `value:"database"`
+		Parameters string `value:"parameters"`
+	}
+	// 数据库配置
+	dbConfiguration struct {
+	}
+)
 
-func init() {
+func (p dbMysqlProperty) dsn() string {
+	return fmt.Sprintf("%s:%s@tcp(%s:%d)/%s?%s", []interface{}{
+		p.Username,
+		p.Password,
+		p.Host,
+		p.Port,
+		p.Database,
+		p.Parameters,
+	}...)
+}
+
+func (dbConfiguration) BeanConstruct(container di.DI) {
+	var db *gorm.DB
 	var err error
-	dbType := os.Getenv("DB")
 
 	config := &gorm.Config{
 		NamingStrategy: schema.NamingStrategy{SingularTable: true},
@@ -36,92 +60,21 @@ func init() {
 		),
 	}
 
+	dbType := container.GetProperty("db.type").(string)
 	switch dbType {
 	case "mysql":
-		host := os.Getenv("MYSQL_HOST")
-		username := os.Getenv("MYSQL_USERNAME")
-		password := os.Getenv("MYSQL_PASSWORD")
-		port := os.Getenv("MYSQL_PORT")
-		database := os.Getenv("MYSQL_DATABASE")
-		parameters := os.Getenv("MYSQL_PARAMETERS")
-		dsn := fmt.Sprintf("%s:%s@tcp(%s:%s)/%s?%s", []interface{}{
-			username,
-			password,
-			host,
-			port,
-			database,
-			parameters,
-		}...)
+		mysqlProperty := container.LoadProperties("db.", dbMysqlProperty{}).(dbMysqlProperty)
 		// 配置数据库
-		db, err = gorm.Open(mysql.Open(dsn), config)
+		db, err = gorm.Open(mysql.Open(mysqlProperty.dsn()), config)
 		if err != nil {
 			panic(errors.Join(err, errors.New("failed to connect database")))
 		}
 	default:
-		db, err = gorm.Open(sqlite.Open(filepath.Join(os.Getenv("DATA"), "data.db")), config)
+		sqliteProperty := container.LoadProperties("db.", dbSqliteProperty{}).(dbSqliteProperty)
+		db, err = gorm.Open(sqlite.Open(sqliteProperty.File), config)
 		if err != nil {
 			panic(errors.Join(err, errors.New("failed to connect database")))
 		}
 	}
-	err = db.AutoMigrate(Statistics{})
-	if err != nil {
-		panic(errors.Join(err, errors.New("failed to auto migrate table")))
-	}
-}
-
-type Statistics struct {
-	GID      string `gorm:"primaryKey"`
-	UID      string `gorm:"primaryKey"`
-	Date     string `gorm:"primaryKey"`
-	MsgType  int    `gorm:"primaryKey"`
-	Username string ``
-	Count    int64  ``
-}
-
-func StatisticGroup(msg *openwechat.Message) error {
-	group, err := msg.Sender()
-	if err != nil {
-		return err
-	}
-	user, err := msg.SenderInGroup()
-	if err != nil {
-		return err
-	}
-	username := user.DisplayName
-	if user.DisplayName == "" {
-		username = user.NickName
-	}
-	record := Statistics{
-		GID: group.UserName,
-		//UID:      user.UserName,
-		UID:      fmt.Sprintf("%d", user.AttrStatus),
-		Date:     time.Now().Format(time.DateOnly),
-		Username: username,
-		MsgType:  int(msg.MsgType),
-		Count:    1,
-	}
-	update := map[string]interface{}{
-		"username": username,
-		"count":    gorm.Expr("count + 1"),
-	}
-	return db.Clauses(clause.OnConflict{DoUpdates: clause.Assignments(update)}).Create(&record).Error
-}
-
-type Rank struct {
-	GID      string `gorm:"primaryKey"`
-	UID      string `gorm:"primaryKey"`
-	Username string ``
-	Total    int64  ``
-}
-
-func TopN(GID string, limit int) (*[]Rank, error) {
-	date := time.Now().Format(time.DateOnly)
-	ranks := new([]Rank)
-	return ranks, db.Model(&Statistics{}).
-		Select("g_id, uid, username, sum(count) as total").
-		Where("g_id = ? and date = ?", GID, date).
-		Group("g_id,uid,username").
-		Order("total desc").
-		Limit(limit).
-		Find(ranks).Error
+	container.RegisterNamedBean("db", db)
 }

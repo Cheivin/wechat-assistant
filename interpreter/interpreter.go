@@ -1,7 +1,9 @@
 package interpreter
 
 import (
+	"github.com/cheivin/di"
 	"github.com/eatmoreapple/openwechat"
+	"github.com/go-resty/resty/v2"
 	"github.com/traefik/yaegi/interp"
 	"github.com/traefik/yaegi/stdlib"
 	"gorm.io/gorm"
@@ -41,8 +43,10 @@ func newInterpreter() *interp.Interpreter {
 			"New":         reflect.ValueOf(interp.New),
 			"Options":     reflect.ValueOf((*interp.Options)(nil)),
 		},
-		"wechat-assistant/lock/lock": {
-			"Locker": reflect.ValueOf((*lock.Locker)(nil)),
+		"github.com/go-resty/resty/v2/v2": {
+			"Client":   reflect.ValueOf((*resty.Client)(nil)),
+			"Request":  reflect.ValueOf((*resty.Request)(nil)),
+			"Response": reflect.ValueOf((*resty.Response)(nil)),
 		},
 		"gorm.io/gorm/gorm": {
 			"DB":                reflect.ValueOf((*gorm.DB)(nil)),
@@ -58,6 +62,13 @@ func newInterpreter() *interp.Interpreter {
 			"Locking":    reflect.ValueOf((*clause.Locking)(nil)),
 			"Update":     reflect.ValueOf((*clause.Update)(nil)),
 			"Delete":     reflect.ValueOf((*clause.Delete)(nil)),
+		},
+		"github.com/cheivin/di/di": {
+			"DI":         reflect.ValueOf((*di.DI)(nil)),
+			"ValueStore": reflect.ValueOf((*di.ValueStore)(nil)),
+		},
+		"wechat-assistant/lock/lock": {
+			"Locker": reflect.ValueOf((*lock.Locker)(nil)),
 		},
 	})
 	return interpreter

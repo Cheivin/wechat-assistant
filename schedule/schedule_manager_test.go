@@ -34,7 +34,10 @@ func setupManager() (*Manager, error) {
 	if err != nil {
 		return nil, err
 	}
-	return NewManager(db, nil)
+	manager := &Manager{DB: db}
+	manager.BeanConstruct()
+	manager.AfterPropertiesSet()
+	return manager, nil
 }
 
 func TestManager_Install(t *testing.T) {

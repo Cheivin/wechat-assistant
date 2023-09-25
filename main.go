@@ -1,70 +1,96 @@
 package main
 
 import (
-	"fmt"
+	"context"
+	"crypto/tls"
+	"github.com/cheivin/di"
 	"github.com/eatmoreapple/openwechat"
-	"github.com/mdp/qrterminal/v3"
+	"github.com/go-resty/resty/v2"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
-	plugin2 "wechat-assistant/plugin"
+	"time"
+	"wechat-assistant/lock"
+	"wechat-assistant/plugin"
 	"wechat-assistant/schedule"
 )
 
-var (
-	pluginManager *plugin2.Manager
-	taskManager   *schedule.Manager
-)
+func Select[V any](condition bool, True V, False V) V {
+	if condition {
+		return True
+	}
+	return False
+}
+
+var container = di.New()
+
+func init() {
+	container.SetPropertyMap(map[string]interface{}{
+		"bot": map[string]interface{}{
+			"data":   filepath.Join(os.Getenv("DATA"), "storage.json"),
+			"secret": Select(os.Getenv("SECRET") != "", os.Getenv("SECRET"), "MZXW6YTBOI======"),
+		},
+		"db": map[string]interface{}{
+			"type":       os.Getenv("DB"),
+			"file":       filepath.Join(os.Getenv("DATA"), "data.db"),
+			"host":       os.Getenv("MYSQL_HOST"),
+			"port":       os.Getenv("MYSQL_PORT"),
+			"username":   os.Getenv("MYSQL_USERNAME"),
+			"password":   os.Getenv("MYSQL_PASSWORD"),
+			"database":   os.Getenv("MYSQL_DATABASE"),
+			"parameters": os.Getenv("MYSQL_PARAMETERS"),
+		},
+	})
+}
+
+func initClient() *resty.Client {
+	client := resty.New()
+
+	var (
+		dnsResolverIP        = "223.5.5.5:53"
+		dnsResolverProto     = "udp"
+		dnsResolverTimeoutMs = 5000
+	)
+
+	dialer := &net.Dialer{
+		Resolver: &net.Resolver{
+			PreferGo: true,
+			Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+				d := net.Dialer{
+					Timeout: time.Duration(dnsResolverTimeoutMs) * time.Millisecond,
+				}
+				return d.DialContext(ctx, dnsResolverProto, dnsResolverIP)
+			},
+		},
+	}
+	client.SetTransport(&http.Transport{
+		Proxy:                 http.ProxyFromEnvironment,
+		ForceAttemptHTTP2:     true,
+		MaxIdleConns:          100,
+		IdleConnTimeout:       90 * time.Second,
+		TLSHandshakeTimeout:   10 * time.Second,
+		ExpectContinueTimeout: 1 * time.Second,
+		TLSClientConfig:       &tls.Config{InsecureSkipVerify: true},
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			return dialer.DialContext(ctx, network, addr)
+		},
+	})
+	return client
+}
 
 func main() {
 	bot := openwechat.DefaultBot(openwechat.Desktop) // 桌面模式
-	// 注册登陆二维码回调
-	bot.UUIDCallback = func(uuid string) {
-		fmt.Println(openwechat.GetQrcodeUrl(uuid))
-		qrterminal.Generate("https://login.weixin.qq.com/l/"+uuid, qrterminal.L, os.Stdout)
-	}
-	// 创建热存储容器对象
-	reloadStorage := openwechat.NewFileHotReloadStorage(filepath.Join(os.Getenv("DATA"), "storage.json"))
-	defer reloadStorage.Close()
 
-	// 执行热登录
-	if err := bot.HotLogin(reloadStorage, openwechat.NewRetryLoginOption()); err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	// 获取登陆的用户
-	self, err := bot.GetCurrentUser()
-	if err != nil {
-		fmt.Println(err)
-		return
-	}
-
-	// 获取所有的好友
-	friends, err := self.Friends()
-	fmt.Println(friends, err)
-	// 获取所有的群组
-	groups, err := self.Groups()
-	for _, g := range groups.AsMembers() {
-		fmt.Println("群:", g.NickName, g.DisplayName)
-	}
-
-	// 插件管理器
-	pluginManager, err = plugin2.NewManager(db)
-	if err != nil {
-		panic(err)
-	}
-	taskManager, err = schedule.NewManager(db, bot)
-	if err != nil {
-		panic(err)
-	}
-
-	dispatcher := openwechat.NewMessageMatchDispatcher()
-	dispatcher.SetAsync(true)
-
-	dispatcher.OnGroup(CommandHandler)
-	dispatcher.OnGroup(RecordMsgHandler)
-
-	bot.MessageHandler = dispatcher.AsMessageHandler()
-
-	bot.Block()
+	container.
+		RegisterNamedBean("resty", initClient()).
+		RegisterNamedBean("bot", bot).
+		Provide(dbConfiguration{}).
+		Provide(lock.DBLocker{}).
+		Provide(plugin.Manager{}).
+		Provide(schedule.Manager{}).
+		Provide(MsgHandler{}).
+		Provide(BotManager{}).
+		Load()
+	container.Serve(bot.Context())
 }

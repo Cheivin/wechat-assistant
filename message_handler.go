@@ -5,41 +5,140 @@ import (
 	"fmt"
 	"github.com/eatmoreapple/openwechat"
 	"golang.org/x/time/rate"
-	"os"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"strconv"
 	"strings"
 	"time"
+	"wechat-assistant/plugin"
+	"wechat-assistant/schedule"
 )
 
-var (
-	totpSecret = "MZXW6YTBOI======"
-	groupLimit = rate.NewLimiter(rate.Every(2*time.Second), 1)
-)
+type MsgHistory struct {
+	ID         uint   `gorm:"primaryKey;autoIncrement"`
+	GID        string ``
+	UID        string ``
+	AttrStatus int64  ``
+	MsgType    int    ``
+	Username   string ``
+	Message    string ``
+	Time       int64  ``
+}
 
-func init() {
-	secret := os.Getenv("SECRET")
-	if secret != "" {
-		totpSecret = secret
+type Statistics struct {
+	GID      string `gorm:"primaryKey"`
+	UID      string `gorm:"primaryKey"`
+	Date     string `gorm:"primaryKey"`
+	MsgType  int    `gorm:"primaryKey"`
+	Username string ``
+	Count    int64  ``
+}
+
+type MsgHandler struct {
+	Secret          string            `value:"bot.secret"`
+	DB              *gorm.DB          `aware:"db"`
+	PluginManager   *plugin.Manager   `aware:""`
+	ScheduleManager *schedule.Manager `aware:""`
+	limit           *rate.Limiter
+}
+
+func (h *MsgHandler) BeanName() string {
+	return "msgHandler"
+}
+
+func (h *MsgHandler) BeanConstruct() {
+	h.limit = rate.NewLimiter(rate.Every(2*time.Second), 1)
+}
+
+func (h *MsgHandler) AfterPropertiesSet() {
+	if err := h.DB.AutoMigrate(Statistics{}); err != nil {
+		panic(err)
 	}
-	_, err := TOTPToken(totpSecret, time.Now().Unix())
-	if err != nil {
+	if err := h.DB.AutoMigrate(MsgHistory{}); err != nil {
+		panic(err)
+	}
+	if _, err := TOTPToken(h.Secret, time.Now().Unix()); err != nil {
 		panic(err)
 	}
 }
 
-func RecordMsgHandler(ctx *openwechat.MessageContext) {
+func (h *MsgHandler) GetHandler() openwechat.MessageHandler {
+	dispatcher := openwechat.NewMessageMatchDispatcher()
+	// 开启异步消息处理
+	dispatcher.SetAsync(true)
+	dispatcher.OnGroup(h.CommandHandler)
+	dispatcher.OnGroup(h.RecordMsgHandler)
+	return dispatcher.AsMessageHandler()
+}
+
+func (h *MsgHandler) statisticGroup(msg *openwechat.Message) error {
+	group, err := msg.Sender()
+	if err != nil {
+		return err
+	}
+	user, err := msg.SenderInGroup()
+	if err != nil {
+		return err
+	}
+	username := user.DisplayName
+	if user.DisplayName == "" {
+		username = user.NickName
+	}
+	record := Statistics{
+		GID: group.UserName,
+		//UID:      user.UserName,
+		UID:      fmt.Sprintf("%d", user.AttrStatus),
+		Date:     time.Now().Format(time.DateOnly),
+		Username: username,
+		MsgType:  int(msg.MsgType),
+		Count:    1,
+	}
+	update := map[string]interface{}{
+		"username": username,
+		"count":    gorm.Expr("count + 1"),
+	}
+	return h.DB.Clauses(clause.OnConflict{DoUpdates: clause.Assignments(update)}).Create(&record).Error
+}
+
+func (h *MsgHandler) recordHistory(msg *openwechat.Message) error {
+	group, err := msg.Sender()
+	if err != nil {
+		return err
+	}
+	user, err := msg.SenderInGroup()
+	if err != nil {
+		return err
+	}
+	username := user.DisplayName
+	if user.DisplayName == "" {
+		username = user.NickName
+	}
+	record := &MsgHistory{
+		GID:        group.UserName,
+		UID:        user.UserName,
+		AttrStatus: user.AttrStatus,
+		MsgType:    int(msg.MsgType),
+		Username:   username,
+		Message:    strings.TrimSpace(openwechat.FormatEmoji(msg.Content)),
+		Time:       msg.CreateTime,
+	}
+	return h.DB.Save(record).Error
+}
+
+func (h *MsgHandler) RecordMsgHandler(ctx *openwechat.MessageContext) {
 	if ctx.IsSystem() {
 		return
 	}
-
-	err := StatisticGroup(ctx.Message)
-	if err != nil {
+	if err := h.recordHistory(ctx.Message); err != nil {
 		fmt.Println("记录消息出错", err)
+	}
+	if err := h.statisticGroup(ctx.Message); err != nil {
+		fmt.Println("统计消息出错", err)
 	}
 	ctx.Abort()
 }
 
-func CommandHandler(ctx *openwechat.MessageContext) {
+func (h *MsgHandler) CommandHandler(ctx *openwechat.MessageContext) {
 	if ctx.IsSystem() || !ctx.IsText() || !ctx.IsAt() {
 		return
 	}
@@ -47,7 +146,7 @@ func CommandHandler(ctx *openwechat.MessageContext) {
 	receiver := sender.MemberList.SearchByUserName(1, ctx.ToUserName)
 	if receiver != nil {
 		// 限流
-		if !groupLimit.Allow() {
+		if !h.limit.Allow() {
 			ctx.Abort()
 			return
 		}
@@ -73,14 +172,14 @@ func CommandHandler(ctx *openwechat.MessageContext) {
 			if len(commands) == 1 {
 				return
 			}
-			ok, err = handlePlugin(commands[1], ctx)
+			ok, err = h.handlePlugin(commands[1], ctx)
 		case "定时任务":
 			if len(commands) == 1 {
 				return
 			}
-			ok, err = handleTask(commands[1], ctx)
+			ok, err = h.handleTask(commands[1], ctx)
 		case "help":
-			addons, _ := pluginManager.List(false)
+			addons, _ := h.PluginManager.List(false)
 			switch len(*addons) {
 			case 0:
 				_, _ = ctx.ReplyText("当前没有加载插件")
@@ -93,7 +192,7 @@ func CommandHandler(ctx *openwechat.MessageContext) {
 			}
 			ok, err = true, nil
 		default:
-			ok, err = Invoke(commands[0], commands[1:], ctx)
+			ok, err = h.Invoke(commands[0], commands[1:], ctx)
 		}
 
 		if err != nil {
@@ -108,13 +207,13 @@ func CommandHandler(ctx *openwechat.MessageContext) {
 	}
 }
 
-func handlePlugin(content string, ctx *openwechat.MessageContext) (ok bool, err error) {
+func (h *MsgHandler) handlePlugin(content string, ctx *openwechat.MessageContext) (ok bool, err error) {
 	// xxxxxx 指令 参数...
 	subCommands := strings.SplitN(content, " ", 3)
 	if len(subCommands) < 2 {
 		return
 	}
-	if subCommands[0] != "000000" && !TOTPVerify(totpSecret, 30, subCommands[0]) {
+	if subCommands[0] != "000000" && !TOTPVerify(h.Secret, 30, subCommands[0]) {
 		fmt.Println("验证失败", time.Now().Format(time.DateTime), subCommands[0])
 		return
 	}
@@ -142,7 +241,7 @@ func handlePlugin(content string, ctx *openwechat.MessageContext) (ok bool, err 
 			pluginPath = params[0]
 		}
 
-		plugin, err := pluginManager.Install(pluginPath)
+		plugin, err := h.PluginManager.Install(pluginPath)
 		if err != nil {
 			return false, errors.New("安装插件出错:" + err.Error())
 		}
@@ -168,7 +267,7 @@ func handlePlugin(content string, ctx *openwechat.MessageContext) (ok bool, err 
 		if len(params) > 1 {
 			pluginPath = params[1]
 		}
-		err := pluginManager.Update(id, pluginPath)
+		err := h.PluginManager.Update(id, pluginPath)
 		if err != nil {
 			return false, errors.New("更新插件出错:" + err.Error())
 		}
@@ -193,11 +292,11 @@ func handlePlugin(content string, ctx *openwechat.MessageContext) (ok bool, err 
 			keyword = params[1]
 			force = "force" == params[2]
 		}
-		plugin, err := pluginManager.Load(id)
+		plugin, err := h.PluginManager.Load(id)
 		if err != nil {
 			return false, err
 		}
-		err = pluginManager.Bind(keyword, plugin, force)
+		err = h.PluginManager.Bind(keyword, plugin, force)
 
 		info := plugin.Info()
 		description := "插件绑定成功，信息如下:\n"
@@ -213,7 +312,7 @@ func handlePlugin(content string, ctx *openwechat.MessageContext) (ok bool, err 
 			return false, errors.New("解绑插件出错:请输入唤醒词")
 		}
 		keyword := strings.SplitN(commands[1], " ", 2)[0]
-		ok, err := pluginManager.Unbind(keyword)
+		ok, err := h.PluginManager.Unbind(keyword)
 		if !ok {
 			return true, errors.New(fmt.Sprintf("解绑插件出错:唤醒词[%s]未绑定插件", keyword))
 		}
@@ -228,7 +327,7 @@ func handlePlugin(content string, ctx *openwechat.MessageContext) (ok bool, err 
 		}
 		params := strings.SplitN(commands[1], " ", 2)
 		id := params[0]
-		if err := pluginManager.Reload(id); err != nil {
+		if err := h.PluginManager.Reload(id); err != nil {
 			return false, errors.New("重载插件出错:" + err.Error())
 		}
 		_, _ = ctx.ReplyText(fmt.Sprintf("插件%s重载完成", id))
@@ -238,7 +337,7 @@ func handlePlugin(content string, ctx *openwechat.MessageContext) (ok bool, err 
 			return false, errors.New("请输入插件ID")
 		}
 		id := strings.SplitN(commands[1], " ", 2)[0]
-		if ok, err := pluginManager.Uninstall(id); err != nil {
+		if ok, err := h.PluginManager.Uninstall(id); err != nil {
 			return false, errors.New("卸载插件出错:" + err.Error())
 		} else if ok {
 			_, _ = ctx.ReplyText("插件卸载成功")
@@ -251,7 +350,7 @@ func handlePlugin(content string, ctx *openwechat.MessageContext) (ok bool, err 
 		if len(commands) > 1 {
 			fromDB = "installed" == strings.SplitN(commands[1], " ", 2)[0]
 		}
-		addons, err := pluginManager.List(fromDB)
+		addons, err := h.PluginManager.List(fromDB)
 		if err != nil {
 			return false, errors.New("查询已安装的插件列表出错")
 		}
@@ -283,13 +382,13 @@ func handlePlugin(content string, ctx *openwechat.MessageContext) (ok bool, err 
 	return false, nil
 }
 
-func handleTask(content string, ctx *openwechat.MessageContext) (ok bool, err error) {
+func (h *MsgHandler) handleTask(content string, ctx *openwechat.MessageContext) (ok bool, err error) {
 	// xxxxxx 指令 参数...
 	subCommands := strings.SplitN(content, " ", 3)
 	if len(subCommands) < 2 {
 		return
 	}
-	if subCommands[0] != "000000" && !TOTPVerify(totpSecret, 30, subCommands[0]) {
+	if subCommands[0] != "000000" && !TOTPVerify(h.Secret, 30, subCommands[0]) {
 		fmt.Println("验证失败", time.Now().Format(time.DateTime), subCommands[0])
 		return
 	}
@@ -317,7 +416,7 @@ func handleTask(content string, ctx *openwechat.MessageContext) (ok bool, err er
 			installPath = params[0]
 		}
 
-		program, err := taskManager.Install(installPath)
+		program, err := h.ScheduleManager.Install(installPath)
 		if err != nil {
 			return false, errors.New("安装任务出错:" + err.Error())
 		}
@@ -340,7 +439,7 @@ func handleTask(content string, ctx *openwechat.MessageContext) (ok bool, err er
 		if len(params) > 1 {
 			installPath = params[1]
 		}
-		err := taskManager.Update(id, installPath)
+		err := h.ScheduleManager.Update(id, installPath)
 		if err != nil {
 			return false, errors.New("更新任务出错:" + err.Error())
 		}
@@ -357,12 +456,12 @@ func handleTask(content string, ctx *openwechat.MessageContext) (ok bool, err er
 		id := params[0]
 		spec := params[1]
 
-		program, err := taskManager.Load(id)
+		program, err := h.ScheduleManager.Load(id)
 		if err != nil {
 			return false, err
 		}
 		sender, _ := ctx.Sender()
-		err = taskManager.Bind(program, spec, sender.UserName)
+		err = h.ScheduleManager.Bind(program, spec, sender.UserName)
 
 		info := program.Info()
 		description := "任务启动成功，信息如下:\n"
@@ -381,7 +480,7 @@ func handleTask(content string, ctx *openwechat.MessageContext) (ok bool, err er
 		if err != nil {
 			return false, errors.New("停止任务出错:任务ID格式错误")
 		}
-		ok, err := taskManager.Unbind(id)
+		ok, err := h.ScheduleManager.Unbind(id)
 		if !ok {
 			return true, errors.New(fmt.Sprintf("停止任务出错:定时任务[%d]未加载", id))
 		}
@@ -396,7 +495,7 @@ func handleTask(content string, ctx *openwechat.MessageContext) (ok bool, err er
 		}
 		params := strings.SplitN(commands[1], " ", 2)
 		id := params[0]
-		if err := taskManager.Reload(id); err != nil {
+		if err := h.ScheduleManager.Reload(id); err != nil {
 			return false, errors.New("重载任务出错:" + err.Error())
 		}
 		_, _ = ctx.ReplyText(fmt.Sprintf("任务%s重载完成", id))
@@ -406,7 +505,7 @@ func handleTask(content string, ctx *openwechat.MessageContext) (ok bool, err er
 			return false, errors.New("请输入任务ID")
 		}
 		id := strings.SplitN(commands[1], " ", 2)[0]
-		if ok, err := taskManager.Uninstall(id); err != nil {
+		if ok, err := h.ScheduleManager.Uninstall(id); err != nil {
 			return false, errors.New("卸载任务出错:" + err.Error())
 		} else if ok {
 			_, _ = ctx.ReplyText("任务卸载成功")
@@ -420,7 +519,7 @@ func handleTask(content string, ctx *openwechat.MessageContext) (ok bool, err er
 			fromDB = "installed" == strings.SplitN(commands[1], " ", 2)[0]
 		}
 		sender, _ := ctx.Sender()
-		infos, err := taskManager.List(sender.UserName, fromDB)
+		infos, err := h.ScheduleManager.List(sender.UserName, fromDB)
 		if err != nil {
 			return false, errors.New("查询已加载的插件列表出错")
 		}
@@ -446,7 +545,7 @@ func handleTask(content string, ctx *openwechat.MessageContext) (ok bool, err er
 	return false, nil
 }
 
-func Invoke(command string, params []string, ctx *openwechat.MessageContext) (bool, error) {
+func (h *MsgHandler) Invoke(command string, params []string, ctx *openwechat.MessageContext) (bool, error) {
 	// 换行符分隔
 	keyword := command
 	pluginParams := make([]string, 0, len(params))
@@ -463,13 +562,13 @@ func Invoke(command string, params []string, ctx *openwechat.MessageContext) (bo
 		}
 	}
 
-	if ok, err := pluginManager.Invoke(keyword, pluginParams, db, ctx); err != nil {
+	if ok, err := h.PluginManager.Invoke(keyword, pluginParams, h.DB, ctx); err != nil {
 		return false, errors.New("调用插件出错:" + err.Error())
 	} else if ok {
 		return true, nil
 	} else {
 		// 尝试调用特殊插件
-		ok, err = pluginManager.Invoke("default", append([]string{command}, params...), db, ctx)
+		ok, err = h.PluginManager.Invoke("default", append([]string{command}, params...), h.DB, ctx)
 		if err != nil {
 			// 仅打印，不做特殊处理
 			fmt.Println("调用插件出错:" + err.Error())

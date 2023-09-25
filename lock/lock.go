@@ -13,7 +13,7 @@ type Locker interface {
 
 type (
 	DBLocker struct {
-		db *gorm.DB
+		DB *gorm.DB `aware:"db"`
 	}
 
 	taskLock struct {
@@ -22,14 +22,16 @@ type (
 	}
 )
 
-func NewDBLocker(db *gorm.DB) (Locker, error) {
-	return &DBLocker{db}, db.AutoMigrate(taskLock{})
+func (l DBLocker) AfterPropertiesSet() {
+	if err := l.DB.AutoMigrate(taskLock{}); err != nil {
+		panic(err)
+	}
 }
 
 func (l DBLocker) Lock(lockKey string, ttl time.Duration) (int, error) {
 	now := time.Now()
 	access := -1
-	err := l.db.Transaction(func(tx *gorm.DB) error {
+	err := l.DB.Transaction(func(tx *gorm.DB) error {
 		lock := new(taskLock)
 		// 查询
 		if err := tx.Take(lock, "id = ?", lockKey).Error; err != nil {
@@ -74,7 +76,7 @@ func (l DBLocker) Lock(lockKey string, ttl time.Duration) (int, error) {
 }
 
 func (l DBLocker) Update(lockKey string, ttl time.Duration) {
-	l.db.Model(taskLock{}).
+	l.DB.Model(taskLock{}).
 		Where("id = ?", lockKey).
 		Update("version", time.Now().Add(ttl).Unix())
 }
