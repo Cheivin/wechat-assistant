@@ -52,10 +52,13 @@ func (b *BotManager) Initialized() {
 
 func (b *BotManager) updateGroup() {
 	c := cron.New(cron.WithSeconds(), cron.WithLogger(cron.DefaultLogger))
-	c.AddFunc("@every 30m", func() {
+	_, err := c.AddFunc("@every 10m", func() {
 		self, _ := b.Bot.GetCurrentUser()
 		self.Groups(true)
 		fmt.Println("更新群信息")
 	})
+	if err != nil {
+		panic(err)
+	}
 	c.Start()
 }
