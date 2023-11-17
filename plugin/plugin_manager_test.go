@@ -36,7 +36,7 @@ func setupManager() (*Manager, error) {
 		return nil, err
 	}
 	manager := &Manager{DB: db}
-	manager.BeanConstruct()
+	manager.BeanConstruct(nil)
 	manager.AfterPropertiesSet()
 	return manager, nil
 }

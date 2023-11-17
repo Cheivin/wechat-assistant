@@ -197,12 +197,12 @@ func (h *MsgHandler) CommandHandler(ctx *openwechat.MessageContext) {
 
 		if err != nil {
 			_, _ = ctx.ReplyText("调用插件出错:" + err.Error())
-			ctx.Abort()
 			_ = ctx.AsRead()
+			ctx.Abort()
 			return
 		} else if ok {
-			ctx.Abort()
 			_ = ctx.AsRead()
+			ctx.Abort()
 		}
 	}
 }

@@ -7,6 +7,9 @@ import (
 	"github.com/eatmoreapple/openwechat"
 	"github.com/go-resty/resty/v2"
 	"gorm.io/gorm"
+	"net/url"
+	"path/filepath"
+	"strings"
 	"sync"
 	"wechat-assistant/interpreter"
 	"wechat-assistant/lock"
@@ -79,7 +82,13 @@ func (m *Manager) init() error {
 		return err
 	}
 	for _, addon := range addons {
-		plugin, err := NewCodePlugin(addon.Package, addon.Code)
+		var plugin Plugin
+		var err error
+		if strings.HasPrefix(addon.Code, "http") {
+			plugin, err = NewRemotePlugin(addon.Package, addon.Code, m.Resty)
+		} else {
+			plugin, err = NewCodePlugin(addon.Package, addon.Code)
+		}
 		if err != nil {
 			return err
 		} else if err := plugin.Init(m.DB); err != nil {
@@ -130,12 +139,24 @@ func (m *Manager) recycle() {
 	}
 }
 
-func (m *Manager) Install(pluginPath string) (Plugin, error) {
-	packageName, code, err := interpreter.GetCode(pluginPath)
-	if err != nil {
-		return nil, err
+func (m *Manager) Install(pluginPath string) (plugin Plugin, err error) {
+	var packageName, code string
+	if strings.HasPrefix(pluginPath, "[remote]http") {
+		api, err := url.ParseRequestURI(strings.TrimPrefix(pluginPath, "[remote]"))
+		if err != nil {
+			return nil, err
+		}
+		api.RawQuery = ""
+		code = api.String()
+		packageName = filepath.Base(api.Path)
+		plugin, err = NewRemotePlugin(packageName, code, m.Resty)
+	} else {
+		packageName, code, err = interpreter.GetCode(pluginPath)
+		if err != nil {
+			return nil, err
+		}
+		plugin, err = NewCodePlugin(packageName, code)
 	}
-	plugin, err := NewCodePlugin(packageName, code)
 	if err != nil {
 		return nil, err
 	}
@@ -187,7 +208,11 @@ func (m *Manager) Load(id string) (Plugin, error) {
 			return nil, errors.New("加载插件出错")
 		}
 	}
-	return NewCodePlugin(addon.Package, addon.Code)
+	if strings.HasPrefix(addon.Code, "http") {
+		return NewRemotePlugin(addon.Package, addon.Code, m.Resty)
+	} else {
+		return NewCodePlugin(addon.Package, addon.Code)
+	}
 }
 
 func (m *Manager) List(fromDB bool) (*[]BindInfo, error) {

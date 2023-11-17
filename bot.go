@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"github.com/eatmoreapple/openwechat"
 	"github.com/mdp/qrterminal/v3"
+	"github.com/robfig/cron/v3"
 	"os"
 )
 
@@ -35,8 +36,7 @@ func (b *BotManager) Initialized() {
 	// 获取登陆的用户
 	self, err := b.Bot.GetCurrentUser()
 	if err != nil {
-		fmt.Println(err)
-		return
+		panic(err)
 	}
 
 	// 获取所有的好友
@@ -47,4 +47,15 @@ func (b *BotManager) Initialized() {
 	for _, g := range groups.AsMembers() {
 		fmt.Println("群:", g.NickName, g.DisplayName)
 	}
+	b.updateGroup()
+}
+
+func (b *BotManager) updateGroup() {
+	c := cron.New(cron.WithSeconds(), cron.WithLogger(cron.DefaultLogger))
+	c.AddFunc("@every 30m", func() {
+		self, _ := b.Bot.GetCurrentUser()
+		self.Groups(true)
+		fmt.Println("更新群信息")
+	})
+	c.Start()
 }

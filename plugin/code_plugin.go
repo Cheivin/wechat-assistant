@@ -64,7 +64,7 @@ func (p *CodePlugin) Handle(db *gorm.DB, ctx *openwechat.MessageContext) (bool, 
 	return p.fn(db, ctx)
 }
 
-func NewCodePlugin(packageName string, codeStr string) (*CodePlugin, error) {
+func NewCodePlugin(packageName string, codeStr string) (Plugin, error) {
 	// 加载
 	code, err := interpreter.NewCode(packageName, codeStr)
 	if err != nil {

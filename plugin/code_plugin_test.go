@@ -10,10 +10,11 @@ func Test_loadPlugin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plugin, err := NewCodePlugin(packageName, code)
+	iPlugin, err := NewCodePlugin(packageName, code)
 	if err != nil {
 		t.Fatal(err)
 	}
+	plugin := iPlugin.(*CodePlugin)
 	t.Log(plugin.info.Keyword, plugin.info.Description)
 }
 
@@ -22,10 +23,11 @@ func Test_initPlugin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plugin, err := NewCodePlugin(packageName, code)
+	iPlugin, err := NewCodePlugin(packageName, code)
 	if err != nil {
 		t.Fatal(err)
 	}
+	plugin := iPlugin.(*CodePlugin)
 	if plugin.initFn == nil {
 		t.Error("Fail")
 	}
@@ -40,10 +42,11 @@ func Test_destroyPlugin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plugin, err := NewCodePlugin(packageName, code)
+	iPlugin, err := NewCodePlugin(packageName, code)
 	if err != nil {
 		t.Fatal(err)
 	}
+	plugin := iPlugin.(*CodePlugin)
 	if plugin.destroyFn == nil {
 		t.Error("Fail")
 	}
