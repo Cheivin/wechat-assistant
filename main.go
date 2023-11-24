@@ -28,8 +28,9 @@ var container = di.New()
 func init() {
 	container.SetPropertyMap(map[string]interface{}{
 		"bot": map[string]interface{}{
-			"data":   filepath.Join(os.Getenv("DATA"), "storage.json"),
-			"secret": Select(os.Getenv("SECRET") != "", os.Getenv("SECRET"), "MZXW6YTBOI======"),
+			"data":     filepath.Join(os.Getenv("DATA"), "storage.json"),
+			"secret":   Select(os.Getenv("SECRET") != "", os.Getenv("SECRET"), "MZXW6YTBOI======"),
+			"syncHost": Select(os.Getenv("SYNC_HOST") != "", os.Getenv("SYNC_HOST"), ""),
 		},
 		"db": map[string]interface{}{
 			"type":       os.Getenv("DB"),

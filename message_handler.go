@@ -109,16 +109,12 @@ func (h *MsgHandler) recordHistory(msg *openwechat.Message) error {
 	if err != nil {
 		return err
 	}
-	username := user.DisplayName
-	if user.DisplayName == "" {
-		username = user.NickName
-	}
 	record := &MsgHistory{
 		GID:        group.UserName,
 		UID:        user.UserName,
 		AttrStatus: user.AttrStatus,
 		MsgType:    int(msg.MsgType),
-		Username:   username,
+		Username:   user.NickName,
 		Message:    strings.TrimSpace(openwechat.FormatEmoji(msg.Content)),
 		Time:       msg.CreateTime,
 	}
@@ -138,13 +134,64 @@ func (h *MsgHandler) RecordMsgHandler(ctx *openwechat.MessageContext) {
 	ctx.Abort()
 }
 
+func (h *MsgHandler) dealCommand(ctx *openwechat.MessageContext, command string, content string) {
+	//commands := strings.SplitN(content, " ", 2)
+
+	var ok bool
+	var err error
+	switch command {
+	case "插件":
+		if content == "" {
+			return
+		}
+		ok, err = h.handlePlugin(content, ctx)
+	case "定时任务":
+		if content == "" {
+			return
+		}
+		ok, err = h.handleTask(content, ctx)
+	case "help":
+		addons, _ := h.PluginManager.List(false)
+		switch len(*addons) {
+		case 0:
+			_, _ = ctx.ReplyText("当前没有加载插件")
+		default:
+			msg := "已加载的插件信息如下:\n"
+			for _, v := range *addons {
+				msg += fmt.Sprintf("[%s]:%s\n", v.BindKeyword, v.Description)
+			}
+			_, _ = ctx.ReplyText(msg)
+		}
+		ok, err = true, nil
+	default:
+		if content == "" {
+			ok, err = h.Invoke(command, []string{}, ctx)
+		} else {
+			ok, err = h.Invoke(command, []string{content}, ctx)
+		}
+	}
+
+	if err != nil {
+		_, _ = ctx.ReplyText("调用插件出错:" + err.Error())
+		_ = ctx.AsRead()
+		ctx.Abort()
+		return
+	} else if ok {
+		_ = ctx.AsRead()
+		ctx.Abort()
+	}
+}
+
 func (h *MsgHandler) CommandHandler(ctx *openwechat.MessageContext) {
-	if ctx.IsSystem() || !ctx.IsText() || !ctx.IsAt() {
+	if ctx.IsSystem() || !ctx.IsText() {
 		return
 	}
-	sender, _ := ctx.Sender()
-	receiver := sender.MemberList.SearchByUserName(1, ctx.ToUserName)
-	if receiver != nil {
+	if ctx.IsAt() {
+		sender, _ := ctx.Sender()
+		receiver := sender.MemberList.SearchByUserName(1, ctx.ToUserName)
+		if receiver == nil {
+			return
+		}
 		// 限流
 		if !h.limit.Allow() {
 			ctx.Abort()
@@ -164,47 +211,29 @@ func (h *MsgHandler) CommandHandler(ctx *openwechat.MessageContext) {
 		}
 		content := strings.TrimSpace(strings.TrimPrefix(msgContent, atFlag))
 		commands := strings.SplitN(content, " ", 2)
-
-		var ok bool
-		var err error
-		switch commands[0] {
-		case "插件":
-			if len(commands) == 1 {
-				return
-			}
-			ok, err = h.handlePlugin(commands[1], ctx)
-		case "定时任务":
-			if len(commands) == 1 {
-				return
-			}
-			ok, err = h.handleTask(commands[1], ctx)
-		case "help":
-			addons, _ := h.PluginManager.List(false)
-			switch len(*addons) {
-			case 0:
-				_, _ = ctx.ReplyText("当前没有加载插件")
-			default:
-				msg := "已加载的插件信息如下:\n"
-				for _, v := range *addons {
-					msg += fmt.Sprintf("[%s]:%s\n", v.BindKeyword, v.Description)
-				}
-				_, _ = ctx.ReplyText(msg)
-			}
-			ok, err = true, nil
-		default:
-			ok, err = h.Invoke(commands[0], commands[1:], ctx)
+		if len(commands) == 1 {
+			content = ""
+		} else {
+			content = commands[1]
 		}
-
-		if err != nil {
-			_, _ = ctx.ReplyText("调用插件出错:" + err.Error())
-			_ = ctx.AsRead()
+		h.dealCommand(ctx, commands[0], content)
+	} else if strings.HasPrefix(ctx.Content, "#") {
+		// 限流
+		if !h.limit.Allow() {
 			ctx.Abort()
 			return
-		} else if ok {
-			_ = ctx.AsRead()
-			ctx.Abort()
 		}
+		msgContent := strings.TrimSpace(openwechat.FormatEmoji(ctx.Content))
+		content := strings.TrimSpace(strings.TrimPrefix(msgContent, "#"))
+		commands := strings.SplitN(content, " ", 2)
+		if len(commands) == 1 {
+			content = ""
+		} else {
+			content = commands[1]
+		}
+		h.dealCommand(ctx, commands[0], content)
 	}
+
 }
 
 func (h *MsgHandler) handlePlugin(content string, ctx *openwechat.MessageContext) (ok bool, err error) {
