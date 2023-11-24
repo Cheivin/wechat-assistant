@@ -55,9 +55,9 @@ func (h *MsgHandler) AfterPropertiesSet() {
 	if err := h.DB.AutoMigrate(Statistics{}); err != nil {
 		panic(err)
 	}
-	if err := h.DB.AutoMigrate(MsgHistory{}); err != nil {
-		panic(err)
-	}
+	//if err := h.DB.AutoMigrate(MsgHistory{}); err != nil {
+	//	panic(err)
+	//}
 	if _, err := TOTPToken(h.Secret, time.Now().Unix()); err != nil {
 		panic(err)
 	}
