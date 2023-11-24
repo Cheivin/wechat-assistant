@@ -95,8 +95,8 @@ func main() {
 		Provide(plugin.Manager{}).
 		Provide(schedule.Manager{}).
 		Provide(MsgHandler{}).
-		Provide(BotManager{}).
 		Provide(WebContainer{}).
+		Provide(BotManager{}).
 		Load()
 	container.Serve(bot.Context())
 }
