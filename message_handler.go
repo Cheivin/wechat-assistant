@@ -21,6 +21,7 @@ type MsgHistory struct {
 	AttrStatus int64  ``
 	MsgType    int    ``
 	Username   string ``
+	WechatName string ``
 	Message    string ``
 	Time       int64  ``
 }
@@ -109,12 +110,17 @@ func (h *MsgHandler) recordHistory(msg *openwechat.Message) error {
 	if err != nil {
 		return err
 	}
+	username := user.DisplayName
+	if user.DisplayName == "" {
+		username = user.NickName
+	}
 	record := &MsgHistory{
 		GID:        group.UserName,
 		UID:        user.UserName,
 		AttrStatus: user.AttrStatus,
 		MsgType:    int(msg.MsgType),
-		Username:   user.NickName,
+		Username:   username,
+		WechatName: user.NickName,
 		Message:    strings.TrimSpace(openwechat.FormatEmoji(msg.Content)),
 		Time:       msg.CreateTime,
 	}
