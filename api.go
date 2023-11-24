@@ -19,7 +19,6 @@ import (
 
 type WebContainer struct {
 	Port   int             `value:"app.port"`
-	Key    string          `value:"app.key"`
 	Bot    *openwechat.Bot `aware:"bot"`
 	Resty  *resty.Client   `aware:"resty"`
 	router *gin.Engine
@@ -62,24 +61,6 @@ func (w *WebContainer) Destroy() {
 }
 
 func (w *WebContainer) sendMsg(c *gin.Context) {
-	username, password, basicAuth := c.Request.BasicAuth()
-	keys := strings.Split(w.Key, ",")
-	if basicAuth {
-		basicAuth = false
-		for _, key := range keys {
-			if key == username+password {
-				basicAuth = true
-				break
-			}
-		}
-	}
-	if !basicAuth {
-		c.JSON(200, gin.H{
-			"code":  401,
-			"error": "未授权访问",
-		})
-		return
-	}
 	req := new(apiRequest)
 	err := c.Bind(req)
 	if err != nil {
