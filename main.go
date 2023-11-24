@@ -27,6 +27,10 @@ var container = di.New()
 
 func init() {
 	container.SetPropertyMap(map[string]interface{}{
+		"app": map[string]interface{}{
+			"port": Select(os.Getenv("APP_PORT") != "", os.Getenv("APP_PORT"), "8080"),
+			"key":  Select(os.Getenv("APP_KEY") != "", os.Getenv("APP_KEY"), "cjsNs7nWH2B"),
+		},
 		"bot": map[string]interface{}{
 			"data":     filepath.Join(os.Getenv("DATA"), "storage.json"),
 			"secret":   Select(os.Getenv("SECRET") != "", os.Getenv("SECRET"), "MZXW6YTBOI======"),
@@ -92,6 +96,7 @@ func main() {
 		Provide(schedule.Manager{}).
 		Provide(MsgHandler{}).
 		Provide(BotManager{}).
+		Provide(WebContainer{}).
 		Load()
 	container.Serve(bot.Context())
 }

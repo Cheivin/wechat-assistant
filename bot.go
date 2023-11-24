@@ -52,7 +52,7 @@ func (b *BotManager) Initialized() {
 	// 获取所有的群组
 	groups, err := self.Groups()
 	for _, g := range groups {
-		fmt.Println("群:", g.NickName, g.DisplayName)
+		fmt.Println("群:", g.UserName, g.AvatarID(), g.NickName, g.DisplayName)
 	}
 	b.updateAndSyncModifyUser()
 	b.startUpdateGroupTask()
