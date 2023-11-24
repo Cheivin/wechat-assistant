@@ -48,6 +48,7 @@ func (w *WebContainer) AfterPropertiesSet() {
 // Initialized DI加载完成后，启动服务
 func (w *WebContainer) Initialized() {
 	go func() {
+		fmt.Println("启动web服务", "端口", w.Port)
 		if err := w.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			panic(err)
 		}
