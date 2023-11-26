@@ -48,7 +48,7 @@ func (h *MsgHandler) BeanName() string {
 }
 
 func (h *MsgHandler) BeanConstruct() {
-	h.limit = rate.NewLimiter(rate.Every(2*time.Second), 1)
+	h.limit = rate.NewLimiter(rate.Every(1*time.Second), 1)
 }
 
 func (h *MsgHandler) AfterPropertiesSet() {

@@ -34,6 +34,7 @@ func (w *WebContainer) BeanConstruct() {
 	w.router = gin.New()
 	w.router.RemoteIPHeaders = []string{"X-Forwarded-For", "X-Real-IP", "Proxy-Client-IP", "WL-Proxy-Client-IP", "HTTP_CLIENT_IP", "HTTP_X_FORWARDED_FOR"}
 	w.router.POST("/msg/send", w.sendMsg)
+	w.router.GET("/group", w.getGroupInfo)
 }
 
 // AfterPropertiesSet 注入完成时触发
@@ -60,6 +61,13 @@ func (w *WebContainer) Destroy() {
 	_ = w.server.Shutdown(ctx)
 }
 
+func (w *WebContainer) getSelf() (*openwechat.Self, error) {
+	if !w.Bot.Alive() {
+		return nil, errors.New("bot已掉线")
+	}
+	return w.Bot.GetCurrentUser()
+}
+
 func (w *WebContainer) sendMsg(c *gin.Context) {
 	req := new(apiRequest)
 	err := c.Bind(req)
@@ -77,15 +85,7 @@ func (w *WebContainer) sendMsg(c *gin.Context) {
 		})
 		return
 	}
-	if !w.Bot.Alive() {
-		c.JSON(200, gin.H{
-			"code":  500,
-			"error": "Bot已掉线",
-		})
-		return
-	}
-
-	self, err := w.Bot.GetCurrentUser()
+	self, err := w.getSelf()
 	if err != nil {
 		c.JSON(200, gin.H{
 			"code":  500,
@@ -208,6 +208,60 @@ func (w *WebContainer) sendMsg(c *gin.Context) {
 	}
 }
 
+func (w *WebContainer) getGroupInfo(c *gin.Context) {
+	gid := c.Query("gid")
+	if gid == "" {
+		c.JSON(200, gin.H{
+			"code":  400,
+			"error": "gid不能为空",
+		})
+		return
+	}
+	if !w.Bot.Alive() {
+		c.JSON(200, gin.H{
+			"code":  500,
+			"error": "Bot已掉线",
+		})
+		return
+	}
+	self, err := w.getSelf()
+	if err != nil {
+		c.JSON(200, gin.H{
+			"code":  500,
+			"error": err.Error(),
+		})
+		return
+	}
+	groups, _ := self.Groups()
+	g := groups.SearchByUserName(1, gid).First()
+	if g == nil {
+		c.JSON(200, gin.H{
+			"code":  404,
+			"error": "群组不存在",
+		})
+		return
+	}
+	members, _ := g.Members()
+	users := make([]user, 0, members.Count())
+	for _, member := range members {
+		users = append(users, user{
+			Uid:         member.UserName,
+			NickName:    member.NickName,
+			DisplayName: member.DisplayName,
+			AttrStatus:  int(member.AttrStatus),
+		})
+	}
+	c.JSON(200, gin.H{
+		"code":  0,
+		"error": "",
+		"data": group{
+			Gid:  g.UserName,
+			Name: g.NickName,
+			User: users,
+		},
+	})
+}
+
 func (w *WebContainer) download(filename string, src string) (io.ReadCloser, error) {
 	if strings.HasPrefix("BASE64:", src) {
 		srcBytes, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(src, "BASE64:"))
@@ -246,5 +300,17 @@ type (
 		Type     int    `json:"type" form:"type"`         // 回复类型 1:文本,2:图片,3:视频,4:文件
 		Body     string `json:"body" form:"body"`         // 回复内容,type=1时为文本内容,type=2/3/4时为资源地址
 		Filename string `json:"filename" form:"filename"` // 文件名称
+	}
+
+	group struct {
+		Gid  string `json:"gid"`
+		Name string `json:"name"`
+		User []user `json:"user"`
+	}
+	user struct {
+		Uid         string `json:"uid"`
+		NickName    string `json:"nickName"`
+		DisplayName string `json:"displayName"`
+		AttrStatus  int    `json:"attrStatus"`
 	}
 )
