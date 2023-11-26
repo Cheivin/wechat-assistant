@@ -35,6 +35,7 @@ func (w *WebContainer) BeanConstruct() {
 	w.router.RemoteIPHeaders = []string{"X-Forwarded-For", "X-Real-IP", "Proxy-Client-IP", "WL-Proxy-Client-IP", "HTTP_CLIENT_IP", "HTTP_X_FORWARDED_FOR"}
 	w.router.POST("/msg/send", w.sendMsg)
 	w.router.GET("/group", w.getGroupInfo)
+	w.router.GET("/group/:gid", w.getGroupInfo)
 }
 
 // AfterPropertiesSet 注入完成时触发
@@ -209,7 +210,11 @@ func (w *WebContainer) sendMsg(c *gin.Context) {
 }
 
 func (w *WebContainer) getGroupInfo(c *gin.Context) {
-	gid := c.Query("gid")
+	var gid string
+	gid = c.Param("gid")
+	if gid == "" {
+		gid = c.Query("gid")
+	}
 	if gid == "" {
 		c.JSON(200, gin.H{
 			"code":  400,
