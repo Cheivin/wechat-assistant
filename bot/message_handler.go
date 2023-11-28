@@ -106,6 +106,9 @@ func (h *MsgHandler) RecordMsgHandler(ctx *openwechat.MessageContext) {
 	if ctx.IsSystem() {
 		return
 	}
+	if ctx.IsSendBySelf() {
+		return
+	}
 	if err := h.recordHistory(ctx.Message); err != nil {
 		fmt.Println("记录消息出错", err)
 	}
@@ -156,7 +159,7 @@ func (h *MsgHandler) dealCommand(ctx *openwechat.MessageContext, command string,
 }
 
 func (h *MsgHandler) CommandHandler(ctx *openwechat.MessageContext) {
-	if ctx.IsSystem() || !ctx.IsText() {
+	if ctx.IsSystem() || ctx.IsSendBySelf() || !ctx.IsText() {
 		return
 	}
 	if ctx.IsAt() {
