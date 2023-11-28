@@ -9,6 +9,7 @@ import (
 	"github.com/eatmoreapple/openwechat"
 	"github.com/go-resty/resty/v2"
 	"io"
+	"log"
 	"os"
 	"strings"
 )
@@ -52,7 +53,7 @@ func (s *MsgSender) SendGroupTextMsgByGroupName(gid string, msg string) (string,
 	}
 }
 
-func (s *MsgSender) SendGroupMediaMsgByGid(gid string, mediaType int, src string, filename string) (string, error) {
+func (s *MsgSender) SendGroupMediaMsgByGid(gid string, mediaType int, src string, filename string, prompt string) (string, error) {
 	self, err := s.getSelf()
 	if err != nil {
 		return "", err
@@ -62,10 +63,10 @@ func (s *MsgSender) SendGroupMediaMsgByGid(gid string, mediaType int, src string
 	if group == nil {
 		return "", errors.New("群不存在")
 	}
-	return s.sendMediaMessage(group, mediaType, src, filename)
+	return s.sendMediaMessage(group, mediaType, src, filename, prompt)
 }
 
-func (s *MsgSender) SendGroupMediaMsgByGroupName(gid string, mediaType int, src string, filename string) (string, error) {
+func (s *MsgSender) SendGroupMediaMsgByGroupName(gid string, mediaType int, src string, filename string, prompt string) (string, error) {
 	self, err := s.getSelf()
 	if err != nil {
 		return "", err
@@ -75,19 +76,27 @@ func (s *MsgSender) SendGroupMediaMsgByGroupName(gid string, mediaType int, src 
 	if group == nil {
 		return "", errors.New("群不存在")
 	}
-	return s.sendMediaMessage(group, mediaType, src, filename)
+	return s.sendMediaMessage(group, mediaType, src, filename, prompt)
 }
 
-func (s *MsgSender) sendMediaMessage(group *openwechat.Group, mediaType int, src string, filename string) (string, error) {
+func (s *MsgSender) sendMediaMessage(group *openwechat.Group, mediaType int, src string, filename string, prompt string) (string, error) {
 	self, err := s.getSelf()
 	if err != nil {
 		return "", err
 	}
 
+	var promptSent *openwechat.SentMessage
+
 	switch mediaType {
 	case 2:
 		if filename == "" {
 			filename = fmt.Sprintf("%x.jpg", md5.Sum([]byte(src)))
+		}
+		if prompt != "" {
+			promptSent, _ = self.SendTextToGroup(group, prompt)
+			defer func() {
+				_ = promptSent.Revoke()
+			}()
 		}
 		reader, err := s.download(s.Resty, filename, src)
 		if err != nil {
@@ -105,6 +114,12 @@ func (s *MsgSender) sendMediaMessage(group *openwechat.Group, mediaType int, src
 		if filename == "" {
 			filename = fmt.Sprintf("%x.mp4", md5.Sum([]byte(src)))
 		}
+		if prompt != "" {
+			promptSent, _ = self.SendTextToGroup(group, prompt)
+			defer func() {
+				_ = promptSent.Revoke()
+			}()
+		}
 		reader, err := s.download(s.Resty, filename, src)
 		if err != nil {
 			return "", err
@@ -121,11 +136,18 @@ func (s *MsgSender) sendMediaMessage(group *openwechat.Group, mediaType int, src
 		if filename == "" {
 			filename = fmt.Sprintf("%x", md5.Sum([]byte(src)))
 		}
+		if prompt != "" {
+			promptSent, _ = self.SendTextToGroup(group, prompt)
+			defer func() {
+				_ = promptSent.Revoke()
+			}()
+		}
 		reader, err := s.download(s.Resty, filename, src)
 		if err != nil {
 			return "", err
 		}
 		defer func() {
+
 			_ = reader.Close()
 		}()
 		if sent, err := self.SendFileToGroup(group, reader); err != nil {
@@ -147,6 +169,7 @@ func (s *MsgSender) getSelf() (*openwechat.Self, error) {
 
 func (s *MsgSender) download(client *resty.Client, filename string, src string) (io.ReadCloser, error) {
 	if strings.HasPrefix("BASE64:", src) {
+		log.Println("转换BASE64资源", filename)
 		srcBytes, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(src, "BASE64:"))
 		if err != nil {
 			return nil, errors.New("解析资源信息出错")
@@ -157,6 +180,7 @@ func (s *MsgSender) download(client *resty.Client, filename string, src string) 
 		}
 		return os.Open(filename)
 	} else {
+		log.Println("下载资源", src, ">>", filename)
 		resource, err := client.R().Get(src)
 		if err != nil {
 			return nil, err

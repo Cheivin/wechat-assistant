@@ -54,9 +54,9 @@ func (b *Manager) commandHandler(command redirect.BotCommand) {
 			}
 		case 2, 3, 4:
 			if msg.Gid != "" {
-				_, _ = b.MessageSender.SendGroupMediaMsgByGid(msg.Gid, msg.Type, msg.Body, msg.Filename)
+				_, _ = b.MessageSender.SendGroupMediaMsgByGid(msg.Gid, msg.Type, msg.Body, msg.Filename, msg.Prompt)
 			} else if msg.GroupName != "" {
-				_, _ = b.MessageSender.SendGroupMediaMsgByGroupName(msg.GroupName, msg.Type, msg.Body, msg.Filename)
+				_, _ = b.MessageSender.SendGroupMediaMsgByGroupName(msg.GroupName, msg.Type, msg.Body, msg.Filename, msg.Prompt)
 			}
 
 		}
@@ -86,7 +86,7 @@ func (b *Manager) Initialized() {
 	for _, g := range groups {
 		fmt.Println("群:", g.UserName, g.AvatarID(), g.NickName, g.DisplayName)
 	}
-	go b.updateAndSyncModifyUser()
+	b.updateAndSyncModifyUser()
 	b.startUpdateGroupTask()
 }
 

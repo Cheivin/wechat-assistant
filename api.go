@@ -27,10 +27,16 @@ func (w *WebContainer) BeanName() string {
 func (w *WebContainer) BeanConstruct() {
 	w.router = gin.New()
 	w.router.RemoteIPHeaders = []string{"X-Forwarded-For", "X-Real-IP", "Proxy-Client-IP", "WL-Proxy-Client-IP", "HTTP_CLIENT_IP", "HTTP_X_FORWARDED_FOR"}
-	w.router.POST("/msg/send", w.sendMsg)
-	w.router.GET("/groups", w.getGroups)
-	w.router.GET("/group", w.getGroupInfo)
-	w.router.GET("/group/:gid", w.getGroupInfo)
+	w.router.POST("/msg/send", w.nocache, w.sendMsg)
+	w.router.GET("/groups", w.nocache, w.getGroups)
+	w.router.GET("/group", w.nocache, w.getGroupInfo)
+	w.router.GET("/group/:gid", w.nocache, w.getGroupInfo)
+}
+
+func (w *WebContainer) nocache(c *gin.Context) {
+	c.Header("Cache-Control", "no-cache, no-store, must-revalidate")
+	c.Header("Pragma", "no-cache")
+	c.Header("Expires", "0")
 }
 
 // AfterPropertiesSet 注入完成时触发
@@ -92,9 +98,9 @@ func (w *WebContainer) sendMsg(c *gin.Context) {
 		}
 	case 2, 3, 4:
 		if req.Gid != "" {
-			msgId, err = w.MessageSender.SendGroupMediaMsgByGid(req.Gid, req.Type, req.Body, req.Filename)
+			msgId, err = w.MessageSender.SendGroupMediaMsgByGid(req.Gid, req.Type, req.Body, req.Filename, req.Prompt)
 		} else if req.GroupName != "" {
-			msgId, err = w.MessageSender.SendGroupMediaMsgByGroupName(req.GroupName, req.Type, req.Body, req.Filename)
+			msgId, err = w.MessageSender.SendGroupMediaMsgByGroupName(req.GroupName, req.Type, req.Body, req.Filename, req.Prompt)
 		}
 	}
 	if err != nil {
@@ -195,6 +201,7 @@ type (
 		Type      int    `json:"type" form:"type"`         // 回复类型 1:文本,2:图片,3:视频,4:文件
 		Body      string `json:"body" form:"body"`         // 回复内容,type=1时为文本内容,type=2/3/4时为资源地址
 		Filename  string `json:"filename" form:"filename"` // 文件名称
+		Prompt    string `json:"prompt" form:"prompt"`     // 发送媒体资源前的提示词,会自动撤回
 	}
 
 	group struct {
