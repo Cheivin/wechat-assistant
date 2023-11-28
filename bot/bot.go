@@ -79,8 +79,13 @@ func (b *Manager) Initialized() {
 	}
 
 	// 获取所有的好友
-	_, _ = self.Friends()
+	friends, err := self.Friends()
+	fmt.Println(friends, err)
 	// 获取所有的群组
+	groups, err := self.Groups()
+	for _, g := range groups {
+		fmt.Println("群:", g.UserName, g.AvatarID(), g.NickName, g.DisplayName)
+	}
 	go b.updateAndSyncModifyUser()
 	b.startUpdateGroupTask()
 }
