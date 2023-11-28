@@ -1,28 +1,22 @@
 package main
 
 import (
-	"bytes"
 	"context"
-	"crypto/md5"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"github.com/eatmoreapple/openwechat"
 	"github.com/gin-gonic/gin"
-	"github.com/go-resty/resty/v2"
-	"io"
 	"net/http"
-	"os"
-	"strings"
 	"time"
+	"wechat-assistant/bot"
 )
 
 type WebContainer struct {
-	Port   int             `value:"app.port"`
-	Bot    *openwechat.Bot `aware:"bot"`
-	Resty  *resty.Client   `aware:"resty"`
-	router *gin.Engine
-	server *http.Server
+	Port          int             `value:"app.port"`
+	Bot           *openwechat.Bot `aware:"bot"`
+	MessageSender *bot.MsgSender  `aware:""`
+	router        *gin.Engine
+	server        *http.Server
 }
 
 func (w *WebContainer) BeanName() string {
@@ -34,6 +28,7 @@ func (w *WebContainer) BeanConstruct() {
 	w.router = gin.New()
 	w.router.RemoteIPHeaders = []string{"X-Forwarded-For", "X-Real-IP", "Proxy-Client-IP", "WL-Proxy-Client-IP", "HTTP_CLIENT_IP", "HTTP_X_FORWARDED_FOR"}
 	w.router.POST("/msg/send", w.sendMsg)
+	w.router.GET("/groups", w.getGroups)
 	w.router.GET("/group", w.getGroupInfo)
 	w.router.GET("/group/:gid", w.getGroupInfo)
 }
@@ -79,13 +74,45 @@ func (w *WebContainer) sendMsg(c *gin.Context) {
 		})
 		return
 	}
-	if req.Gid == "" {
+	if req.Gid == "" && req.GroupName == "" {
 		c.JSON(200, gin.H{
 			"code":  400,
-			"error": "gid不能为空",
+			"error": "群id或群名称不能为空",
 		})
 		return
 	}
+	var msgId string
+	err = errors.New("暂不支持该类型")
+	switch req.Type {
+	case 1:
+		if req.Gid != "" {
+			msgId, err = w.MessageSender.SendGroupTextMsgByGid(req.Gid, req.Body)
+		} else if req.GroupName != "" {
+			msgId, err = w.MessageSender.SendGroupTextMsgByGroupName(req.GroupName, req.Body)
+		}
+	case 2, 3, 4:
+		if req.Gid != "" {
+			msgId, err = w.MessageSender.SendGroupMediaMsgByGid(req.Gid, req.Type, req.Body, req.Filename)
+		} else if req.GroupName != "" {
+			msgId, err = w.MessageSender.SendGroupMediaMsgByGroupName(req.GroupName, req.Type, req.Body, req.Filename)
+		}
+	}
+	if err != nil {
+		c.JSON(200, gin.H{
+			"code":  500,
+			"error": err.Error(),
+		})
+	} else {
+		c.JSON(200, gin.H{
+			"code":  0,
+			"error": "",
+			"msgId": msgId,
+		})
+	}
+}
+
+func (w *WebContainer) getGroups(c *gin.Context) {
+	_, update := c.GetQuery("update")
 	self, err := w.getSelf()
 	if err != nil {
 		c.JSON(200, gin.H{
@@ -94,119 +121,19 @@ func (w *WebContainer) sendMsg(c *gin.Context) {
 		})
 		return
 	}
-
-	groups, _ := self.Groups()
-	group := groups.SearchByUserName(1, req.Gid).First()
-	if group == nil {
-		c.JSON(200, gin.H{
-			"code":  404,
-			"error": "群组不存在",
-		})
-		return
-	}
-
-	switch req.Type {
-	case 1:
-		if sent, err := self.SendTextToGroup(group, req.Body); err != nil {
-			c.JSON(200, gin.H{
-				"code":  500,
-				"error": "发送失败:" + err.Error(),
-			})
-		} else {
-			c.JSON(200, gin.H{
-				"code":  0,
-				"error": "",
-				"msgId": sent.MsgId,
-			})
-		}
-	case 2:
-		if req.Filename == "" {
-			req.Filename = fmt.Sprintf("%x.jpg", md5.Sum([]byte(req.Body)))
-		}
-		reader, err := w.download(req.Filename, req.Body)
-		if err != nil {
-			c.JSON(200, gin.H{
-				"code":  500,
-				"error": err.Error(),
-			})
-			return
-		}
-		defer func() {
-			_ = reader.Close()
-		}()
-		if sent, err := self.SendImageToGroup(group, reader); err != nil {
-			c.JSON(200, gin.H{
-				"code":  500,
-				"error": "发送失败:" + err.Error(),
-			})
-		} else {
-			c.JSON(200, gin.H{
-				"code":  0,
-				"error": "",
-				"msgId": sent.MsgId,
-			})
-		}
-
-	case 3:
-		if req.Filename == "" {
-			req.Filename = fmt.Sprintf("%x.mp4", md5.Sum([]byte(req.Body)))
-		}
-		reader, err := w.download(req.Filename, req.Body)
-		if err != nil {
-			c.JSON(200, gin.H{
-				"code":  500,
-				"error": err.Error(),
-			})
-			return
-		}
-		defer func() {
-			_ = reader.Close()
-		}()
-		if sent, err := self.SendVideoToGroup(group, reader); err != nil {
-			c.JSON(200, gin.H{
-				"code":  500,
-				"error": "发送失败:" + err.Error(),
-			})
-		} else {
-			c.JSON(200, gin.H{
-				"code":  0,
-				"error": "",
-				"msgId": sent.MsgId,
-			})
-		}
-	case 4:
-		if req.Filename == "" {
-			req.Filename = fmt.Sprintf("%x", md5.Sum([]byte(req.Body)))
-		}
-		reader, err := w.download(req.Filename, req.Body)
-		if err != nil {
-			c.JSON(200, gin.H{
-				"code":  500,
-				"error": err.Error(),
-			})
-			return
-		}
-		defer func() {
-			_ = reader.Close()
-		}()
-		if sent, err := self.SendFileToGroup(group, reader); err != nil {
-			c.JSON(200, gin.H{
-				"code":  500,
-				"error": "发送失败:" + err.Error(),
-			})
-		} else {
-			c.JSON(200, gin.H{
-				"code":  0,
-				"error": "",
-				"msgId": sent.MsgId,
-			})
-		}
-	default:
-		c.JSON(200, gin.H{
-			"code":  405,
-			"error": "暂不支持该类型",
+	groups, _ := self.Groups(update)
+	result := make([]group, 0, groups.Count())
+	for _, g := range groups {
+		result = append(result, group{
+			Gid:  g.UserName,
+			Name: g.NickName,
 		})
 	}
+	c.JSON(200, gin.H{
+		"code":  0,
+		"error": "",
+		"data":  result,
+	})
 }
 
 func (w *WebContainer) getGroupInfo(c *gin.Context) {
@@ -215,17 +142,11 @@ func (w *WebContainer) getGroupInfo(c *gin.Context) {
 	if gid == "" {
 		gid = c.Query("gid")
 	}
+	_, update := c.GetQuery("update")
 	if gid == "" {
 		c.JSON(200, gin.H{
 			"code":  400,
 			"error": "gid不能为空",
-		})
-		return
-	}
-	if !w.Bot.Alive() {
-		c.JSON(200, gin.H{
-			"code":  500,
-			"error": "Bot已掉线",
 		})
 		return
 	}
@@ -237,7 +158,7 @@ func (w *WebContainer) getGroupInfo(c *gin.Context) {
 		})
 		return
 	}
-	groups, _ := self.Groups()
+	groups, _ := self.Groups(update)
 	g := groups.SearchByUserName(1, gid).First()
 	if g == nil {
 		c.JSON(200, gin.H{
@@ -262,55 +183,24 @@ func (w *WebContainer) getGroupInfo(c *gin.Context) {
 		"data": group{
 			Gid:  g.UserName,
 			Name: g.NickName,
-			User: users,
+			User: &users,
 		},
 	})
 }
 
-func (w *WebContainer) download(filename string, src string) (io.ReadCloser, error) {
-	if strings.HasPrefix("BASE64:", src) {
-		srcBytes, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(src, "BASE64:"))
-		if err != nil {
-			return nil, errors.New("解析资源信息出错")
-		}
-		err = os.WriteFile(filename, srcBytes, 0644)
-		if err != nil {
-			return nil, errors.New("获取资源信息出错")
-		}
-		return os.Open(filename)
-	} else {
-		resource, err := w.Resty.R().Get(src)
-		if err != nil {
-			return nil, err
-		}
-		body := resource.Body()
-		// 缓存
-		out, err := os.Create(filename)
-		if err != nil {
-			return io.NopCloser(bytes.NewReader(body)), nil
-		}
-		_, err = out.Write(body)
-		if err != nil {
-			_ = out.Close()
-			_ = os.Remove(filename)
-			return nil, errors.New("获取资源信息出错")
-		}
-		return os.Open(filename)
-	}
-}
-
 type (
 	apiRequest struct {
-		Gid      string `json:"gid" form:"gid"`           // 群id
-		Type     int    `json:"type" form:"type"`         // 回复类型 1:文本,2:图片,3:视频,4:文件
-		Body     string `json:"body" form:"body"`         // 回复内容,type=1时为文本内容,type=2/3/4时为资源地址
-		Filename string `json:"filename" form:"filename"` // 文件名称
+		Gid       string `json:"gid" form:"gid"`           // 群id
+		GroupName string `json:"groupName" form:"gid"`     // 群名称
+		Type      int    `json:"type" form:"type"`         // 回复类型 1:文本,2:图片,3:视频,4:文件
+		Body      string `json:"body" form:"body"`         // 回复内容,type=1时为文本内容,type=2/3/4时为资源地址
+		Filename  string `json:"filename" form:"filename"` // 文件名称
 	}
 
 	group struct {
-		Gid  string `json:"gid"`
-		Name string `json:"name"`
-		User []user `json:"user"`
+		Gid  string  `json:"gid"`
+		Name string  `json:"name"`
+		User *[]user `json:"user,omitempty"`
 	}
 	user struct {
 		Uid         string `json:"uid"`

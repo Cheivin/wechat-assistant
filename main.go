@@ -11,9 +11,11 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+	"wechat-assistant/bot"
+	"wechat-assistant/database"
 	"wechat-assistant/lock"
 	"wechat-assistant/plugin"
-	"wechat-assistant/schedule"
+	"wechat-assistant/redirect"
 )
 
 func Select[V any](condition bool, True V, False V) V {
@@ -44,6 +46,12 @@ func init() {
 			"password":   os.Getenv("MYSQL_PASSWORD"),
 			"database":   os.Getenv("MYSQL_DATABASE"),
 			"parameters": os.Getenv("MYSQL_PARAMETERS"),
+		},
+		"mqtt": map[string]interface{}{
+			"broker":   os.Getenv("MQTT_BROKER"),
+			"username": os.Getenv("MQTT_USERNAME"),
+			"password": os.Getenv("MQTT_PASSWORD"),
+			"prefix":   os.Getenv("MQTT_PREFIX"),
 		},
 	})
 }
@@ -84,18 +92,30 @@ func initClient() *resty.Client {
 }
 
 func main() {
-	bot := openwechat.DefaultBot(openwechat.Desktop) // 桌面模式
+	wechatBot := openwechat.DefaultBot(openwechat.Desktop) // 桌面模式
 
-	container.
-		RegisterNamedBean("resty", initClient()).
-		RegisterNamedBean("bot", bot).
-		Provide(dbConfiguration{}).
-		Provide(lock.DBLocker{}).
+	container.RegisterNamedBean("resty", initClient()).
+		RegisterNamedBean("bot", wechatBot)
+
+	// 数据库配置
+	if container.GetProperty("db.type") == "mysql" {
+		container.Provide(database.MysqlConfiguration{})
+	} else {
+		container.Provide(database.SqliteConfiguration{})
+	}
+
+	// 消息转发器
+	broker := container.GetProperty("mqtt.broker")
+	if broker != nil && broker.(string) != "" {
+		container.Provide(redirect.MQTTRedirect{})
+	}
+
+	container.Provide(lock.DBLocker{}).
 		Provide(plugin.Manager{}).
-		Provide(schedule.Manager{}).
-		Provide(MsgHandler{}).
+		Provide(bot.MsgHandler{}).
+		Provide(bot.MsgSender{}).
+		Provide(bot.Manager{}).
 		Provide(WebContainer{}).
-		Provide(BotManager{}).
 		Load()
-	container.Serve(bot.Context())
+	container.Serve(wechatBot.Context())
 }

@@ -1,4 +1,4 @@
-package main
+package bot
 
 import (
 	"fmt"
@@ -9,18 +9,21 @@ import (
 	"log"
 	"os"
 	"strconv"
+	"wechat-assistant/redirect"
 )
 
-type BotManager struct {
-	Data             string          `value:"bot.data"`
-	SyncHost         string          `value:"bot.syncHost"`
-	Bot              *openwechat.Bot `aware:"bot"`
-	MsgHandler       *MsgHandler     `aware:""`
-	Resty            *resty.Client   `aware:"resty"`
+type Manager struct {
+	Data             string               `value:"bot.data"`
+	SyncHost         string               `value:"bot.syncHost"`
+	Bot              *openwechat.Bot      `aware:"bot"`
+	MsgHandler       *MsgHandler          `aware:""`
+	Redirect         redirect.MsgRedirect `aware:"omitempty"`
+	MessageSender    *MsgSender           `aware:""`
+	Resty            *resty.Client        `aware:"resty"`
 	groupUserNameMap map[string]map[string][]string
 }
 
-func (b *BotManager) AfterPropertiesSet() {
+func (b *Manager) AfterPropertiesSet() {
 	// 注册登陆二维码回调
 	b.Bot.UUIDCallback = func(uuid string) {
 		fmt.Println(openwechat.GetQrcodeUrl(uuid))
@@ -28,9 +31,34 @@ func (b *BotManager) AfterPropertiesSet() {
 	}
 	// 注册消息处理器
 	b.Bot.MessageHandler = b.MsgHandler.GetHandler()
+	if b.Redirect != nil {
+		b.Redirect.SetCommandHandler(b.commandHandler)
+	}
 }
 
-func (b *BotManager) Initialized() {
+func (b *Manager) commandHandler(command redirect.BotCommand) {
+	switch command.Command {
+	case "sendMessage":
+		msg := command.Param
+		switch msg.Type {
+		case 1:
+			if msg.Gid != "" {
+				_, _ = b.MessageSender.SendGroupTextMsgByGid(msg.Gid, msg.Body)
+			} else if msg.GroupName != "" {
+				_, _ = b.MessageSender.SendGroupTextMsgByGroupName(msg.GroupName, msg.Body)
+			}
+		case 2, 3, 4:
+			if msg.Gid != "" {
+				_, _ = b.MessageSender.SendGroupMediaMsgByGid(msg.Gid, msg.Type, msg.Body, msg.Filename)
+			} else if msg.GroupName != "" {
+				_, _ = b.MessageSender.SendGroupMediaMsgByGroupName(msg.GroupName, msg.Type, msg.Body, msg.Filename)
+			}
+
+		}
+	}
+}
+
+func (b *Manager) Initialized() {
 	b.groupUserNameMap = make(map[string]map[string][]string)
 	// 创建热存储容器对象
 	reloadStorage := openwechat.NewFileHotReloadStorage(b.Data)
@@ -58,7 +86,8 @@ func (b *BotManager) Initialized() {
 	b.startUpdateGroupTask()
 }
 
-func (b *BotManager) updateGroup() map[string]map[string]openwechat.User {
+// updateGroup 更新群组信息
+func (b *Manager) updateGroup() map[string]map[string]openwechat.User {
 	fmt.Printf("旧信息:%+v\n", b.groupUserNameMap)
 	self, _ := b.Bot.GetCurrentUser()
 	newGroups, _ := self.Groups(true)
@@ -95,7 +124,8 @@ func (b *BotManager) updateGroup() map[string]map[string]openwechat.User {
 	return modifyMap
 }
 
-func (b *BotManager) startUpdateGroupTask() {
+// startUpdateGroupTask 开始定时更新群组信息任务
+func (b *Manager) startUpdateGroupTask() {
 	c := cron.New(cron.WithSeconds(), cron.WithLogger(cron.DefaultLogger))
 	_, err := c.AddFunc("@every 10m", b.updateAndSyncModifyUser)
 	if err != nil {
@@ -104,7 +134,8 @@ func (b *BotManager) startUpdateGroupTask() {
 	c.Start()
 }
 
-func (b *BotManager) updateAndSyncModifyUser() {
+// updateAndSyncModifyUser 刷新变更的用户信息
+func (b *Manager) updateAndSyncModifyUser() {
 	modifyMap := b.updateGroup()
 	if len(modifyMap) == 0 {
 		return
@@ -116,7 +147,8 @@ func (b *BotManager) updateAndSyncModifyUser() {
 	}
 }
 
-func (b *BotManager) callSyncByUid(gid, uid string, attrStatus int64) {
+// callSyncByUid 刷新数据库用户信息
+func (b *Manager) callSyncByUid(gid, uid string, attrStatus int64) {
 	if b.SyncHost == "" {
 		return
 	}

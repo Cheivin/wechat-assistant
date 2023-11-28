@@ -1,4 +1,4 @@
-package main
+package bot
 
 import (
 	"errors"
@@ -6,41 +6,31 @@ import (
 	"github.com/eatmoreapple/openwechat"
 	"golang.org/x/time/rate"
 	"gorm.io/gorm"
-	"gorm.io/gorm/clause"
-	"strconv"
 	"strings"
 	"time"
 	"wechat-assistant/plugin"
-	"wechat-assistant/schedule"
+	"wechat-assistant/redirect"
+	"wechat-assistant/util/totp"
 )
 
 type MsgHistory struct {
 	ID         uint   `gorm:"primaryKey;autoIncrement"`
-	GID        string ``
-	UID        string ``
-	AttrStatus int64  ``
-	MsgType    int    ``
-	Username   string ``
-	WechatName string ``
+	GID        string `gorm:"type:varchar(255)"`
+	UID        string `gorm:"type:varchar(255)"`
+	AttrStatus int64  `gorm:"type:int(20)"`
+	MsgType    int    `gorm:"type:int(2)"`
+	Username   string `gorm:"type:varchar(255)"`
+	WechatName string `gorm:"type:varchar(255)"`
 	Message    string ``
-	Time       int64  ``
-}
-
-type Statistics struct {
-	GID      string `gorm:"primaryKey"`
-	UID      string `gorm:"primaryKey"`
-	Date     string `gorm:"primaryKey"`
-	MsgType  int    `gorm:"primaryKey"`
-	Username string ``
-	Count    int64  ``
+	Time       int64  `gorm:"type:int(20)"`
 }
 
 type MsgHandler struct {
-	Secret          string            `value:"bot.secret"`
-	DB              *gorm.DB          `aware:"db"`
-	PluginManager   *plugin.Manager   `aware:""`
-	ScheduleManager *schedule.Manager `aware:""`
-	limit           *rate.Limiter
+	Secret        string               `value:"bot.secret"`
+	DB            *gorm.DB             `aware:"db"`
+	PluginManager *plugin.Manager      `aware:""`
+	MsgRedirect   redirect.MsgRedirect `aware:"omitempty"`
+	limit         *rate.Limiter
 }
 
 func (h *MsgHandler) BeanName() string {
@@ -52,13 +42,10 @@ func (h *MsgHandler) BeanConstruct() {
 }
 
 func (h *MsgHandler) AfterPropertiesSet() {
-	if err := h.DB.AutoMigrate(Statistics{}); err != nil {
+	if err := h.DB.AutoMigrate(MsgHistory{}); err != nil {
 		panic(err)
 	}
-	//if err := h.DB.AutoMigrate(MsgHistory{}); err != nil {
-	//	panic(err)
-	//}
-	if _, err := TOTPToken(h.Secret, time.Now().Unix()); err != nil {
+	if _, err := totp.TOTPToken(h.Secret, time.Now().Unix()); err != nil {
 		panic(err)
 	}
 }
@@ -70,35 +57,6 @@ func (h *MsgHandler) GetHandler() openwechat.MessageHandler {
 	dispatcher.OnGroup(h.CommandHandler)
 	dispatcher.OnGroup(h.RecordMsgHandler)
 	return dispatcher.AsMessageHandler()
-}
-
-func (h *MsgHandler) statisticGroup(msg *openwechat.Message) error {
-	group, err := msg.Sender()
-	if err != nil {
-		return err
-	}
-	user, err := msg.SenderInGroup()
-	if err != nil {
-		return err
-	}
-	username := user.DisplayName
-	if user.DisplayName == "" {
-		username = user.NickName
-	}
-	record := Statistics{
-		GID: group.UserName,
-		//UID:      user.UserName,
-		UID:      fmt.Sprintf("%d", user.AttrStatus),
-		Date:     time.Now().Format(time.DateOnly),
-		Username: username,
-		MsgType:  int(msg.MsgType),
-		Count:    1,
-	}
-	update := map[string]interface{}{
-		"username": username,
-		"count":    gorm.Expr("count + 1"),
-	}
-	return h.DB.Clauses(clause.OnConflict{DoUpdates: clause.Assignments(update)}).Create(&record).Error
 }
 
 func (h *MsgHandler) recordHistory(msg *openwechat.Message) error {
@@ -114,6 +72,21 @@ func (h *MsgHandler) recordHistory(msg *openwechat.Message) error {
 	if user.DisplayName == "" {
 		username = user.NickName
 	}
+	content := strings.TrimSpace(openwechat.FormatEmoji(msg.Content))
+	if h.MsgRedirect != nil {
+		go func() {
+			h.MsgRedirect.RedirectMessage(redirect.Message{
+				MsgID:      msg.MsgId,
+				UID:        user.UserName,
+				Username:   username,
+				GID:        group.UserName,
+				GroupName:  group.NickName,
+				RawMessage: content,
+				MsgType:    int(msg.MsgType),
+				Time:       msg.CreateTime,
+			})
+		}()
+	}
 	record := &MsgHistory{
 		GID:        group.UserName,
 		UID:        user.UserName,
@@ -121,7 +94,7 @@ func (h *MsgHandler) recordHistory(msg *openwechat.Message) error {
 		MsgType:    int(msg.MsgType),
 		Username:   username,
 		WechatName: user.NickName,
-		Message:    strings.TrimSpace(openwechat.FormatEmoji(msg.Content)),
+		Message:    content,
 		Time:       msg.CreateTime,
 	}
 	return h.DB.Save(record).Error
@@ -133,9 +106,6 @@ func (h *MsgHandler) RecordMsgHandler(ctx *openwechat.MessageContext) {
 	}
 	if err := h.recordHistory(ctx.Message); err != nil {
 		fmt.Println("记录消息出错", err)
-	}
-	if err := h.statisticGroup(ctx.Message); err != nil {
-		fmt.Println("统计消息出错", err)
 	}
 	ctx.Abort()
 }
@@ -151,11 +121,6 @@ func (h *MsgHandler) dealCommand(ctx *openwechat.MessageContext, command string,
 			return
 		}
 		ok, err = h.handlePlugin(content, ctx)
-	case "定时任务":
-		if content == "" {
-			return
-		}
-		ok, err = h.handleTask(content, ctx)
 	case "help":
 		addons, _ := h.PluginManager.List(false)
 		switch len(*addons) {
@@ -248,7 +213,7 @@ func (h *MsgHandler) handlePlugin(content string, ctx *openwechat.MessageContext
 	if len(subCommands) < 2 {
 		return
 	}
-	if subCommands[0] != "000000" && !TOTPVerify(h.Secret, 30, subCommands[0]) {
+	if subCommands[0] != "000000" && !totp.TOTPVerify(h.Secret, 30, subCommands[0]) {
 		fmt.Println("验证失败", time.Now().Format(time.DateTime), subCommands[0])
 		return
 	}
@@ -417,169 +382,6 @@ func (h *MsgHandler) handlePlugin(content string, ctx *openwechat.MessageContext
 	return false, nil
 }
 
-func (h *MsgHandler) handleTask(content string, ctx *openwechat.MessageContext) (ok bool, err error) {
-	// xxxxxx 指令 参数...
-	subCommands := strings.SplitN(content, " ", 3)
-	if len(subCommands) < 2 {
-		return
-	}
-	if subCommands[0] != "000000" && !TOTPVerify(h.Secret, 30, subCommands[0]) {
-		fmt.Println("验证失败", time.Now().Format(time.DateTime), subCommands[0])
-		return
-	}
-	defer func() {
-		if e := recover(); e != nil {
-			switch e.(type) {
-			case error:
-				err = e.(error)
-			case string:
-				err = errors.New(e.(string))
-			default:
-				err = errors.New("定时任务操作出错")
-			}
-		}
-	}()
-	commands := subCommands[1:]
-	switch commands[0] {
-	case "install":
-		if len(commands) == 1 {
-			return false, errors.New("安装任务出错:请输入安装路径")
-		}
-		params := strings.SplitN(commands[1], " ", 3)
-		installPath := ""
-		if len(params) == 1 {
-			installPath = params[0]
-		}
-
-		program, err := h.ScheduleManager.Install(installPath)
-		if err != nil {
-			return false, errors.New("安装任务出错:" + err.Error())
-		}
-
-		description := "插件安装成功，信息如下:\n"
-		info := program.Info()
-		description += "ID:" + program.ID() + "\n"
-		if info.Description != "" {
-			description += "说明:" + info.Description + "\n"
-		}
-		_, _ = ctx.ReplyText(description)
-		return true, nil
-	case "update":
-		if len(commands) == 1 {
-			return false, errors.New("更新任务出错:请输入任务ID")
-		}
-		params := strings.SplitN(commands[1], " ", 3)
-		id := params[0]
-		installPath := ""
-		if len(params) > 1 {
-			installPath = params[1]
-		}
-		err := h.ScheduleManager.Update(id, installPath)
-		if err != nil {
-			return false, errors.New("更新任务出错:" + err.Error())
-		}
-		_, _ = ctx.ReplyText(fmt.Sprintf("任务%s更新完成", id))
-		return true, nil
-	case "on":
-		if len(commands) == 1 {
-			return false, errors.New("启动任务出错:请输入任务ID和触发周期")
-		}
-		params := strings.SplitN(commands[1], " ", 2)
-		if len(params) != 2 {
-			return false, errors.New("启动任务出错:请输入任务ID和触发周期")
-		}
-		id := params[0]
-		spec := params[1]
-
-		program, err := h.ScheduleManager.Load(id)
-		if err != nil {
-			return false, err
-		}
-		sender, _ := ctx.Sender()
-		err = h.ScheduleManager.Bind(program, spec, sender.UserName)
-
-		info := program.Info()
-		description := "任务启动成功，信息如下:\n"
-		description += "定时任务ID:" + program.ID() + "\n"
-		description += "触发周期:" + spec + "\n"
-		if info.Description != "" {
-			description += "说明:" + info.Description + "\n"
-		}
-		_, _ = ctx.ReplyText(description)
-		return true, err
-	case "off":
-		if len(commands) == 1 {
-			return false, errors.New("停止任务出错:请输入定时任务ID")
-		}
-		id, err := strconv.Atoi(strings.SplitN(commands[1], " ", 2)[0])
-		if err != nil {
-			return false, errors.New("停止任务出错:任务ID格式错误")
-		}
-		ok, err := h.ScheduleManager.Unbind(id)
-		if !ok {
-			return true, errors.New(fmt.Sprintf("停止任务出错:定时任务[%d]未加载", id))
-		}
-		if err != nil {
-			return true, errors.New(fmt.Sprintf("停止任务出错:%s", err.Error()))
-		}
-		_, _ = ctx.ReplyText("任务停止成功")
-		return true, nil
-	case "reload":
-		if len(commands) == 1 {
-			return false, errors.New("重载任务出错:请输入任务ID")
-		}
-		params := strings.SplitN(commands[1], " ", 2)
-		id := params[0]
-		if err := h.ScheduleManager.Reload(id); err != nil {
-			return false, errors.New("重载任务出错:" + err.Error())
-		}
-		_, _ = ctx.ReplyText(fmt.Sprintf("任务%s重载完成", id))
-		return true, nil
-	case "uninstall":
-		if len(commands) == 1 {
-			return false, errors.New("请输入任务ID")
-		}
-		id := strings.SplitN(commands[1], " ", 2)[0]
-		if ok, err := h.ScheduleManager.Uninstall(id); err != nil {
-			return false, errors.New("卸载任务出错:" + err.Error())
-		} else if ok {
-			_, _ = ctx.ReplyText("任务卸载成功")
-		} else {
-			_, _ = ctx.ReplyText("未找到任务信息")
-		}
-		return true, nil
-	case "list":
-		fromDB := false
-		if len(commands) > 1 {
-			fromDB = "installed" == strings.SplitN(commands[1], " ", 2)[0]
-		}
-		sender, _ := ctx.Sender()
-		infos, err := h.ScheduleManager.List(sender.UserName, fromDB)
-		if err != nil {
-			return false, errors.New("查询已加载的插件列表出错")
-		}
-		switch len(*infos) {
-		case 0:
-			_, _ = ctx.ReplyText("当前没有任务")
-		default:
-			msg := "加载的任务信息如下:\n"
-			for _, v := range *infos {
-				if v.Spec == "" {
-					msg += fmt.Sprintf("定时任务ID:%d(未启动)\n", v.ID)
-					msg += fmt.Sprintf("--任务ID:[%s]\n", v.TaskID)
-				} else {
-					msg += fmt.Sprintf("ID:%d\n", v.ID)
-					msg += fmt.Sprintf("--任务ID:[%s]\n", v.TaskID)
-					msg += fmt.Sprintf("--触发周期:[%s]\n", v.Spec)
-				}
-			}
-			_, _ = ctx.ReplyText(msg)
-		}
-		return true, nil
-	}
-	return false, nil
-}
-
 func (h *MsgHandler) Invoke(command string, params []string, ctx *openwechat.MessageContext) (bool, error) {
 	// 换行符分隔
 	keyword := command
@@ -602,11 +404,42 @@ func (h *MsgHandler) Invoke(command string, params []string, ctx *openwechat.Mes
 	} else if ok {
 		return true, nil
 	} else {
-		// 尝试调用特殊插件
-		ok, err = h.PluginManager.Invoke("default", append([]string{command}, params...), h.DB, ctx)
-		if err != nil {
-			// 仅打印，不做特殊处理
-			fmt.Println("调用插件出错:" + err.Error())
+		if h.MsgRedirect != nil {
+			msg := ctx.Message
+			group, err := msg.Sender()
+			if err != nil {
+				return false, err
+			}
+			user, err := msg.SenderInGroup()
+			if err != nil {
+				return false, err
+			}
+			username := user.DisplayName
+			if user.DisplayName == "" {
+				username = user.NickName
+			}
+			content := strings.TrimSpace(openwechat.FormatEmoji(msg.Content))
+			ok := h.MsgRedirect.RedirectCommand(redirect.CommandMessage{
+				Message: redirect.Message{
+					MsgID:      msg.MsgId,
+					UID:        user.UserName,
+					Username:   username,
+					GID:        group.UserName,
+					GroupName:  group.NickName,
+					RawMessage: content,
+					MsgType:    int(msg.MsgType),
+					Time:       msg.CreateTime,
+				},
+				Command: strings.Join(append([]string{command}, params...), " "),
+			})
+			return ok, nil
+		} else {
+			// 尝试调用特殊插件
+			ok, err = h.PluginManager.Invoke("default", append([]string{command}, params...), h.DB, ctx)
+			if err != nil {
+				// 仅打印，不做特殊处理
+				fmt.Println("调用插件出错:" + err.Error())
+			}
 		}
 		return ok, nil
 	}
