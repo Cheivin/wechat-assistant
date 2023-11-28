@@ -33,9 +33,8 @@ func init() {
 			"port": Select(os.Getenv("APP_PORT") != "", os.Getenv("APP_PORT"), "8080"),
 		},
 		"bot": map[string]interface{}{
-			"data":     filepath.Join(os.Getenv("DATA"), "storage.json"),
-			"secret":   Select(os.Getenv("SECRET") != "", os.Getenv("SECRET"), "MZXW6YTBOI======"),
-			"syncHost": Select(os.Getenv("SYNC_HOST") != "", os.Getenv("SYNC_HOST"), ""),
+			"data":   filepath.Join(os.Getenv("DATA"), "storage.json"),
+			"secret": Select(os.Getenv("SECRET") != "", os.Getenv("SECRET"), "MZXW6YTBOI======"),
 		},
 		"db": map[string]interface{}{
 			"type":       os.Getenv("DB"),

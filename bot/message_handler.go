@@ -19,6 +19,7 @@ type MsgHistory struct {
 	UID        string `gorm:"type:varchar(255)"`
 	AttrStatus int64  `gorm:"type:int(20)"`
 	MsgType    int    `gorm:"type:int(2)"`
+	GroupName  string `gorm:"type:varchar(255)"`
 	Username   string `gorm:"type:varchar(255)"`
 	WechatName string `gorm:"type:varchar(255)"`
 	Message    string ``
@@ -92,6 +93,7 @@ func (h *MsgHandler) recordHistory(msg *openwechat.Message) error {
 		UID:        user.UserName,
 		AttrStatus: user.AttrStatus,
 		MsgType:    int(msg.MsgType),
+		GroupName:  group.NickName,
 		Username:   username,
 		WechatName: user.NickName,
 		Message:    content,

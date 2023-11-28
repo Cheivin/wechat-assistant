@@ -6,24 +6,29 @@ import (
 	"github.com/go-resty/resty/v2"
 	"github.com/mdp/qrterminal/v3"
 	"github.com/robfig/cron/v3"
-	"log"
+	"gorm.io/gorm"
+	"gorm.io/gorm/clause"
 	"os"
-	"strconv"
 	"wechat-assistant/redirect"
 )
 
 type Manager struct {
-	Data             string               `value:"bot.data"`
-	SyncHost         string               `value:"bot.syncHost"`
-	Bot              *openwechat.Bot      `aware:"bot"`
-	MsgHandler       *MsgHandler          `aware:""`
-	Redirect         redirect.MsgRedirect `aware:"omitempty"`
-	MessageSender    *MsgSender           `aware:""`
-	Resty            *resty.Client        `aware:"resty"`
-	groupUserNameMap map[string]map[string][]string
+	Data          string               `value:"bot.data"`
+	Bot           *openwechat.Bot      `aware:"bot"`
+	MsgHandler    *MsgHandler          `aware:""`
+	Redirect      redirect.MsgRedirect `aware:"omitempty"`
+	MessageSender *MsgSender           `aware:""`
+	Resty         *resty.Client        `aware:"resty"`
+	DB            *gorm.DB             `aware:"db"`
 }
 
 func (b *Manager) AfterPropertiesSet() {
+	if err := b.DB.AutoMigrate(Group{}); err != nil {
+		panic(err)
+	}
+	if err := b.DB.AutoMigrate(GroupUser{}); err != nil {
+		panic(err)
+	}
 	// 注册登陆二维码回调
 	b.Bot.UUIDCallback = func(uuid string) {
 		fmt.Println(openwechat.GetQrcodeUrl(uuid))
@@ -59,7 +64,6 @@ func (b *Manager) commandHandler(command redirect.BotCommand) {
 }
 
 func (b *Manager) Initialized() {
-	b.groupUserNameMap = make(map[string]map[string][]string)
 	// 创建热存储容器对象
 	reloadStorage := openwechat.NewFileHotReloadStorage(b.Data)
 	defer reloadStorage.Close()
@@ -75,53 +79,50 @@ func (b *Manager) Initialized() {
 	}
 
 	// 获取所有的好友
-	friends, err := self.Friends()
-	fmt.Println(friends, err)
+	_, _ = self.Friends()
 	// 获取所有的群组
-	groups, err := self.Groups()
-	for _, g := range groups {
-		fmt.Println("群:", g.UserName, g.AvatarID(), g.NickName, g.DisplayName)
-	}
-	b.updateAndSyncModifyUser()
+	go b.updateAndSyncModifyUser()
 	b.startUpdateGroupTask()
 }
 
 // updateGroup 更新群组信息
-func (b *Manager) updateGroup() map[string]map[string]openwechat.User {
-	fmt.Printf("旧信息:%+v\n", b.groupUserNameMap)
+func (b *Manager) updateGroup() ([]Group, []GroupUser) {
+	fmt.Println("更新群信息")
 	self, _ := b.Bot.GetCurrentUser()
 	newGroups, _ := self.Groups(true)
-	fmt.Println("更新群信息")
-	modifyMap := make(map[string]map[string]openwechat.User)
+
+	var modifyUsers []GroupUser
+	var modifyGroups []Group
+
 	for i := range newGroups {
 		group := newGroups[i]
-		oldUserMap := b.groupUserNameMap[group.UserName]
-		if oldUserMap == nil {
-			oldUserMap = make(map[string][]string)
+
+		groupModel := Group{GID: group.UserName, GroupName: group.NickName}
+		res := b.DB.Clauses(clause.OnConflict{DoUpdates: clause.Assignments(map[string]interface{}{
+			"group_name": group.NickName,
+		})}).Create(groupModel)
+		if res.RowsAffected > 0 {
+			modifyGroups = append(modifyGroups, groupModel)
 		}
-		newUserMap := make(map[string][]string)
-		userMap := make(map[string]openwechat.User)
 		members, _ := group.Members()
 		for _, member := range members {
-			newUserMap[member.UserName] = []string{member.NickName, member.DisplayName}
-
-			if names, ok := oldUserMap[member.UserName]; ok {
-				if names[0] != member.NickName {
-					userMap[member.UserName] = openwechat.User{UserName: member.UserName, NickName: member.NickName, DisplayName: member.DisplayName, AttrStatus: member.AttrStatus}
-				} else if names[1] != member.DisplayName {
-					userMap[member.UserName] = openwechat.User{UserName: member.UserName, NickName: member.NickName, DisplayName: member.DisplayName, AttrStatus: member.AttrStatus}
-				}
-			} else {
-				userMap[member.UserName] = openwechat.User{UserName: member.UserName, NickName: member.NickName, DisplayName: member.DisplayName, AttrStatus: member.AttrStatus}
+			groupUser := GroupUser{
+				GID:        group.UserName,
+				UID:        member.UserName,
+				Username:   member.DisplayName,
+				WechatName: member.NickName,
+				AttrStatus: member.AttrStatus,
+			}
+			res := b.DB.Clauses(clause.OnConflict{DoUpdates: clause.Assignments(map[string]interface{}{
+				"username":    member.DisplayName,
+				"wechat_name": member.NickName,
+			})}).Create(groupUser)
+			if res.RowsAffected > 0 {
+				modifyUsers = append(modifyUsers, groupUser)
 			}
 		}
-
-		if len(userMap) > 0 {
-			modifyMap[group.UserName] = userMap
-		}
-		b.groupUserNameMap[group.UserName] = newUserMap
 	}
-	return modifyMap
+	return modifyGroups, modifyUsers
 }
 
 // startUpdateGroupTask 开始定时更新群组信息任务
@@ -136,29 +137,47 @@ func (b *Manager) startUpdateGroupTask() {
 
 // updateAndSyncModifyUser 刷新变更的用户信息
 func (b *Manager) updateAndSyncModifyUser() {
-	modifyMap := b.updateGroup()
-	if len(modifyMap) == 0 {
-		return
+	groups, users := b.updateGroup()
+	if len(groups) > 0 {
+		for i := range groups {
+			b.updateMsgHistoryGroup(groups[i])
+		}
 	}
-	for gid, users := range modifyMap {
-		for uid, user := range users {
-			b.callSyncByUid(gid, uid, user.AttrStatus)
+	if len(users) > 0 {
+		for i := range users {
+			b.updateMsgHistoryUser(users[i])
 		}
 	}
 }
 
-// callSyncByUid 刷新数据库用户信息
-func (b *Manager) callSyncByUid(gid, uid string, attrStatus int64) {
-	if b.SyncHost == "" {
-		return
-	}
-	_, err := b.Resty.R().
-		SetQueryParam("type", "2").
-		SetQueryParam("gid", gid).
-		SetQueryParam("uid", uid).
-		SetQueryParam("attrStatus", strconv.Itoa(int(attrStatus))).
-		Get(b.SyncHost)
-	if err != nil {
-		log.Println("同步出错", err)
-	}
+func (b *Manager) updateMsgHistoryGroup(group Group) {
+	b.DB.Model(&MsgHistory{}).
+		Where("g_id = ?", group.GID).
+		Update("group_name", group.GroupName)
 }
+
+// updateMsgHistoryUser 刷新数据库用户信息
+func (b *Manager) updateMsgHistoryUser(user GroupUser) {
+	b.DB.Model(&MsgHistory{}).
+		Where("g_id = ?", user.GID).
+		Where("uid = ?", user.UID).
+		Updates(map[string]interface{}{
+			"username":    user.Username,
+			"wechat_name": user.WechatName,
+			"attr_status": user.AttrStatus,
+		})
+}
+
+type (
+	Group struct {
+		GID       string `gorm:"primaryKey;type:varchar(100)"`
+		GroupName string `gorm:"type:varchar(255)"`
+	}
+	GroupUser struct {
+		GID        string `gorm:"primaryKey;type:varchar(100)"`
+		UID        string `gorm:"primaryKey;type:varchar(100)"`
+		Username   string `gorm:"type:varchar(255)"`
+		WechatName string `gorm:"type:varchar(255)"`
+		AttrStatus int64  `gorm:"type:int(20)"`
+	}
+)
