@@ -106,15 +106,19 @@ func (b *Manager) updateGroup() ([]Group, []GroupUser) {
 		}
 		members, _ := group.Members()
 		for _, member := range members {
+			username := member.UserName
+			if member.DisplayName != "" {
+				username = member.DisplayName
+			}
 			groupUser := GroupUser{
 				GID:        group.UserName,
 				UID:        member.UserName,
-				Username:   member.DisplayName,
+				Username:   username,
 				WechatName: member.NickName,
 				AttrStatus: member.AttrStatus,
 			}
 			res := b.DB.Clauses(clause.OnConflict{DoUpdates: clause.Assignments(map[string]interface{}{
-				"username":    member.DisplayName,
+				"username":    username,
 				"wechat_name": member.NickName,
 			})}).Create(groupUser)
 			if res.RowsAffected > 0 {
