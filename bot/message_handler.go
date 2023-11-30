@@ -102,8 +102,9 @@ func (h *MsgHandler) saveFile(msg *openwechat.Message) string {
 		}
 		filename = filename + fileExt
 	}
-	filename = filepath.Join(h.FilesPath, time.Now().Format("2006/01/02"), filename)
-	_ = os.MkdirAll(filepath.Dir(filename), os.ModePerm)
+	filename = filepath.Join(time.Now().Format("2006/01/02"), filename)
+	savePath := filepath.Join(h.FilesPath, filename)
+	_ = os.MkdirAll(filepath.Dir(savePath), os.ModePerm)
 	if buf.Len() > 0 {
 		if h.Uploader != nil {
 			go func() {
@@ -115,18 +116,18 @@ func (h *MsgHandler) saveFile(msg *openwechat.Message) string {
 				}
 			}()
 		}
-		if err := os.WriteFile(filename, buf.Bytes(), 0666); err != nil {
-			log.Println("写入文件失败", filename, err)
+		if err := os.WriteFile(savePath, buf.Bytes(), 0666); err != nil {
+			log.Println("写入文件失败", savePath, err)
 			return filename
 		}
 	} else {
-		if err := msg.SaveFileToLocal(filename); err != nil {
-			log.Println("保存文件失败", filename, err)
+		if err := msg.SaveFileToLocal(savePath); err != nil {
+			log.Println("保存文件失败", savePath, err)
 			return filename
 		}
 		if h.Uploader != nil {
 			go func() {
-				_, err := h.Uploader.FUpload(filename, filename)
+				_, err := h.Uploader.FUpload(filename, savePath)
 				if err != nil {
 					log.Println("上传文件失败", filename, err)
 				} else {
