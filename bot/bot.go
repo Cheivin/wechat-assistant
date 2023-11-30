@@ -176,7 +176,7 @@ func (b *Manager) updateGroup() ([]Group, []GroupUser) {
 // startUpdateGroupTask 开始定时更新群组信息任务
 func (b *Manager) startUpdateGroupTask() {
 	c := cron.New(cron.WithSeconds(), cron.WithLogger(cron.DefaultLogger))
-	_, err := c.AddFunc("@every 1m", b.updateAndSyncModifyUser)
+	_, err := c.AddFunc("@every 10m", b.updateAndSyncModifyUser)
 	if err != nil {
 		log.Fatalln("添加定时任务出错", err)
 	}
