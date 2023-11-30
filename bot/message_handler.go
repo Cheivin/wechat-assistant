@@ -156,6 +156,7 @@ func (h *MsgHandler) recordHistory(msg *openwechat.Message) error {
 	// 带文件的消息需要保存,并替换成路径
 	if msg.HasFile() {
 		msg.Content = h.saveFile(msg)
+		content = msg.Content
 	}
 	if h.MsgRedirect != nil {
 		go func() {
