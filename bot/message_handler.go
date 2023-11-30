@@ -196,9 +196,8 @@ func (h *MsgHandler) RecordMsgHandler(ctx *openwechat.MessageContext) {
 		return
 	}
 	if err := h.recordHistory(ctx.Message); err != nil {
-		if errors.Is(err, gorm.ErrDuplicatedKey) {
-
-		} else {
+		if !errors.Is(err, gorm.ErrDuplicatedKey) {
+			_ = ctx.AsRead()
 			log.Println("记录消息出错", err)
 		}
 	}
