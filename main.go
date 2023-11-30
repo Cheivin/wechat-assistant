@@ -18,11 +18,11 @@ import (
 	"wechat-assistant/redirect"
 )
 
-func Select[V any](condition bool, True V, False V) V {
-	if condition {
-		return True
+func GetOrDefault(value string, def string) string {
+	if value == "" {
+		return def
 	}
-	return False
+	return value
 }
 
 var container = di.New()
@@ -30,11 +30,13 @@ var container = di.New()
 func init() {
 	container.SetPropertyMap(map[string]interface{}{
 		"app": map[string]interface{}{
-			"port": Select(os.Getenv("APP_PORT") != "", os.Getenv("APP_PORT"), "8080"),
+			"port": GetOrDefault(os.Getenv("APP_PORT"), "8080"),
 		},
 		"bot": map[string]interface{}{
 			"data":   filepath.Join(os.Getenv("DATA"), "storage.json"),
-			"secret": Select(os.Getenv("SECRET") != "", os.Getenv("SECRET"), "MZXW6YTBOI======"),
+			"secret": GetOrDefault(os.Getenv("SECRET"), "MZXW6YTBOI======"),
+			"files":  GetOrDefault(os.Getenv("DATA_FILES"), filepath.Join(os.Getenv("DATA"), "files")),
+			"cache":  GetOrDefault(os.Getenv("DATA_CACHE"), filepath.Join(os.Getenv("DATA"), "cache")),
 		},
 		"db": map[string]interface{}{
 			"type":       os.Getenv("DB"),
@@ -51,6 +53,13 @@ func init() {
 			"username": os.Getenv("MQTT_USERNAME"),
 			"password": os.Getenv("MQTT_PASSWORD"),
 			"prefix":   os.Getenv("MQTT_PREFIX"),
+		},
+		"s3": map[string]interface{}{
+			"endpoint":   os.Getenv("S3_ENDPOINT"),
+			"region":     os.Getenv("S3_REGION"),
+			"secretId":   os.Getenv("S3_SECRET_ID"),
+			"secretKey":  os.Getenv("S3_SECRET_KEY"),
+			"bucketName": os.Getenv("S3_BUCKET_NAME"),
 		},
 	})
 }
@@ -109,10 +118,16 @@ func main() {
 		container.Provide(redirect.MQTTRedirect{})
 	}
 
+	// oss上传
+	s3Endpoint := container.GetProperty("s3.endpoint")
+	if s3Endpoint != nil && s3Endpoint.(string) != "" {
+		container.Provide(redirect.S3Uploader{})
+	}
+
 	container.Provide(lock.DBLocker{}).
 		Provide(plugin.Manager{}).
 		Provide(bot.MsgHandler{}).
-		Provide(bot.MsgSender{}).
+		Provide(redirect.MsgSender{}).
 		Provide(bot.Manager{}).
 		Provide(WebContainer{}).
 		Load()

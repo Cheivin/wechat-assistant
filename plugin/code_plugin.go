@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"github.com/eatmoreapple/openwechat"
 	"gorm.io/gorm"
+	"log"
 	"runtime"
 	"wechat-assistant/interpreter"
 )
@@ -103,7 +104,7 @@ func NewCodePlugin(packageName string, codeStr string) (Plugin, error) {
 	// 回收钩子
 	runtime.SetFinalizer(&plugin, func(pluginObj interface{}) {
 		p := pluginObj.(*CodePlugin)
-		fmt.Println("Code插件销毁:", p.ID())
+		log.Println("Code插件销毁:", p.ID())
 		p.interpreter = nil
 		p.fn = nil
 		p.initFn = nil

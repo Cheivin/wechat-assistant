@@ -54,7 +54,7 @@ func (MysqlConfiguration) BeanConstruct(container di.DI) {
 		),
 	})
 	if err != nil {
-		panic(errors.Join(err, errors.New("failed to connect database")))
+		log.Fatalln(errors.Join(err, errors.New("failed to connect database")))
 	}
 	container.RegisterNamedBean("db", db)
 }

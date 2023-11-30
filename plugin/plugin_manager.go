@@ -7,12 +7,14 @@ import (
 	"github.com/eatmoreapple/openwechat"
 	"github.com/go-resty/resty/v2"
 	"gorm.io/gorm"
+	"log"
 	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
 	"wechat-assistant/interpreter"
 	"wechat-assistant/lock"
+	"wechat-assistant/redirect"
 )
 
 type (
@@ -36,9 +38,10 @@ type (
 
 type Manager struct {
 	container di.DI
-	DB        *gorm.DB      `aware:"db"`
-	Locker    lock.Locker   `aware:""`
-	Resty     *resty.Client `aware:"resty"`
+	DB        *gorm.DB            `aware:"db"`
+	Locker    lock.Locker         `aware:""`
+	Resty     *resty.Client       `aware:"resty"`
+	Sender    *redirect.MsgSender `aware:""`
 	mutex     sync.RWMutex
 	loaded    map[string]Plugin // 已加载的插件
 	bindMap   map[string]string // 映射关系
@@ -56,10 +59,10 @@ func (m *Manager) BeanConstruct(container di.DI) {
 
 func (m *Manager) AfterPropertiesSet() {
 	if err := m.DB.AutoMigrate(&Addon{}, &AddonBind{}); err != nil {
-		panic(err)
+		log.Fatalln("初始化插件表出错", err)
 	}
 	if err := m.init(); err != nil {
-		panic(err)
+		log.Fatalln("初始化插件出错", err)
 	}
 }
 
@@ -75,7 +78,7 @@ func (m *Manager) init() error {
 	for _, bind := range records {
 		ids = append(ids, bind.ID)
 		m.bindMap[bind.Keyword] = bind.ID
-		fmt.Println(fmt.Sprintf("已启用插件 ID:%s, bindKeyword:%s", bind.ID, bind.Keyword))
+		log.Println(fmt.Sprintf("已启用插件 ID:%s, bindKeyword:%s", bind.ID, bind.Keyword))
 	}
 	var addons []Addon
 	if err := m.DB.Find(&addons, ids).Error; err != nil {
@@ -85,7 +88,7 @@ func (m *Manager) init() error {
 		var plugin Plugin
 		var err error
 		if strings.HasPrefix(addon.Code, "http") {
-			plugin, err = NewRemotePlugin(addon.Package, addon.Code, m.Resty)
+			plugin, err = NewRemotePlugin(addon.Package, addon.Code, m.Resty, m.Sender)
 		} else {
 			plugin, err = NewCodePlugin(addon.Package, addon.Code)
 		}
@@ -149,7 +152,7 @@ func (m *Manager) Install(pluginPath string) (plugin Plugin, err error) {
 		api.RawQuery = ""
 		code = api.String()
 		packageName = filepath.Base(api.Path)
-		plugin, err = NewRemotePlugin(packageName, code, m.Resty)
+		plugin, err = NewRemotePlugin(packageName, code, m.Resty, m.Sender)
 	} else {
 		packageName, code, err = interpreter.GetCode(pluginPath)
 		if err != nil {
@@ -209,7 +212,7 @@ func (m *Manager) Load(id string) (Plugin, error) {
 		}
 	}
 	if strings.HasPrefix(addon.Code, "http") {
-		return NewRemotePlugin(addon.Package, addon.Code, m.Resty)
+		return NewRemotePlugin(addon.Package, addon.Code, m.Resty, m.Sender)
 	} else {
 		return NewCodePlugin(addon.Package, addon.Code)
 	}

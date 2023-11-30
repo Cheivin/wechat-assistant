@@ -5,6 +5,7 @@ import (
 	"github.com/eclipse/paho.mqtt.golang"
 	"log"
 	"os"
+	"strings"
 	"time"
 )
 
@@ -26,7 +27,7 @@ func (r *MQTTRedirect) AfterPropertiesSet() {
 		SetCleanSession(false).
 		SetConnectRetry(true).
 		SetConnectRetryInterval(5 * time.Second).
-		SetClientID("wx_assistant")
+		SetClientID(strings.ReplaceAll(r.Prefix, "/", "_") + "wx_assistant")
 
 	opts.SetKeepAlive(60 * time.Second)
 	opts.SetPingTimeout(10 * time.Second)
@@ -37,7 +38,6 @@ func (r *MQTTRedirect) AfterPropertiesSet() {
 	}
 
 	log.Println("MQTT连接成功!")
-
 	// 订阅主题
 	if token := r.client.Subscribe(r.Prefix+"command/group/#", 2, func(_ mqtt.Client, msg mqtt.Message) {
 		if r.commandHandler != nil {
@@ -52,6 +52,8 @@ func (r *MQTTRedirect) AfterPropertiesSet() {
 	}); token.Wait() && token.Error() != nil {
 		panic(token.Error())
 	}
+	log.Println("订阅主题:", r.Prefix+"command/group/#", "成功")
+
 }
 
 func (r *MQTTRedirect) Destroy() {

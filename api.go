@@ -6,15 +6,16 @@ import (
 	"fmt"
 	"github.com/eatmoreapple/openwechat"
 	"github.com/gin-gonic/gin"
+	"log"
 	"net/http"
 	"time"
-	"wechat-assistant/bot"
+	"wechat-assistant/redirect"
 )
 
 type WebContainer struct {
-	Port          int             `value:"app.port"`
-	Bot           *openwechat.Bot `aware:"bot"`
-	MessageSender *bot.MsgSender  `aware:""`
+	Port          int                 `value:"app.port"`
+	Bot           *openwechat.Bot     `aware:"bot"`
+	MessageSender *redirect.MsgSender `aware:""`
 	router        *gin.Engine
 	server        *http.Server
 }
@@ -50,9 +51,9 @@ func (w *WebContainer) AfterPropertiesSet() {
 // Initialized DI加载完成后，启动服务
 func (w *WebContainer) Initialized() {
 	go func() {
-		fmt.Println("启动web服务", "端口", w.Port)
+		log.Println("启动web服务", "端口", w.Port)
 		if err := w.server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			panic(err)
+			log.Fatalln("启动web服务出错", err)
 		}
 	}()
 }

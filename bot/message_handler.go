@@ -1,15 +1,22 @@
 package bot
 
 import (
+	"bytes"
+	"crypto/md5"
 	"errors"
 	"fmt"
 	"github.com/eatmoreapple/openwechat"
 	"golang.org/x/time/rate"
 	"gorm.io/gorm"
+	"log"
+	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 	"wechat-assistant/plugin"
 	"wechat-assistant/redirect"
+	"wechat-assistant/util/limiter"
 	"wechat-assistant/util/totp"
 )
 
@@ -24,14 +31,17 @@ type MsgHistory struct {
 	WechatName string `gorm:"type:varchar(255)"`
 	Message    string ``
 	Time       int64  `gorm:"type:int(20)"`
+	MsgID      string `gorm:"type:varchar(50)"`
 }
 
 type MsgHandler struct {
 	Secret        string               `value:"bot.secret"`
+	FilesPath     string               `value:"bot.files"`
 	DB            *gorm.DB             `aware:"db"`
 	PluginManager *plugin.Manager      `aware:""`
 	MsgRedirect   redirect.MsgRedirect `aware:"omitempty"`
-	limit         *rate.Limiter
+	Uploader      *redirect.S3Uploader `aware:"omitempty"`
+	limit         *limiter.Limiter
 }
 
 func (h *MsgHandler) BeanName() string {
@@ -39,15 +49,18 @@ func (h *MsgHandler) BeanName() string {
 }
 
 func (h *MsgHandler) BeanConstruct() {
-	h.limit = rate.NewLimiter(rate.Every(1*time.Second), 1)
+	h.limit = limiter.NewLimiter(rate.Every(1*time.Second), 2)
 }
 
 func (h *MsgHandler) AfterPropertiesSet() {
+	if err := os.MkdirAll(h.FilesPath, os.ModePerm); err != nil {
+		log.Fatalln("创建缓存目录失败", err)
+	}
 	if err := h.DB.AutoMigrate(MsgHistory{}); err != nil {
-		panic(err)
+		log.Fatalln("初始化消息记录表出错", err)
 	}
 	if _, err := totp.TOTPToken(h.Secret, time.Now().Unix()); err != nil {
-		panic(err)
+		log.Fatalln("初始化动态密码生成器出错", err)
 	}
 }
 
@@ -58,6 +71,72 @@ func (h *MsgHandler) GetHandler() openwechat.MessageHandler {
 	dispatcher.OnGroup(h.CommandHandler)
 	dispatcher.OnGroup(h.RecordMsgHandler)
 	return dispatcher.AsMessageHandler()
+}
+
+func (h *MsgHandler) saveFile(msg *openwechat.Message) string {
+	defer func() {
+		_ = msg.AsRead()
+	}()
+
+	var buf bytes.Buffer
+	filename := msg.FileName
+	if filename == "" {
+		fileExt := ""
+		filename = fmt.Sprintf("%x", md5.Sum([]byte(msg.Content)))
+		if msg.IsVideo() {
+			fileExt = ".mp4"
+		} else if msg.IsVoice() {
+			fileExt = ".mp3"
+		} else if msg.IsPicture() || msg.IsEmoticon() {
+			if err := msg.SaveFile(&buf); err != nil {
+				log.Println("获取文件失败", err)
+				return ""
+			}
+			filetype := http.DetectContentType(buf.Bytes())
+			filetype = filetype[6:]
+			if strings.Contains(filetype, "-") || strings.EqualFold(filetype, "text/plain") {
+				fileExt = ".jpg"
+			} else {
+				fileExt = "." + filetype
+			}
+		}
+		filename = filename + fileExt
+	}
+	filename = filepath.Join(h.FilesPath, time.Now().Format("2006/01/02"), filename)
+	_ = os.MkdirAll(filepath.Dir(filename), os.ModePerm)
+	if buf.Len() > 0 {
+		if h.Uploader != nil {
+			go func() {
+				_, err := h.Uploader.Upload(filename, bytes.NewReader(buf.Bytes()))
+				if err != nil {
+					log.Println("上传文件失败", filename, err)
+				} else {
+					log.Println("上传文件完成", filename)
+				}
+			}()
+		}
+		if err := os.WriteFile(filename, buf.Bytes(), 0666); err != nil {
+			log.Println("写入文件失败", filename, err)
+			return filename
+		}
+	} else {
+		if err := msg.SaveFileToLocal(filename); err != nil {
+			log.Println("保存文件失败", filename, err)
+			return filename
+		}
+		if h.Uploader != nil {
+			go func() {
+				_, err := h.Uploader.FUpload(filename, filename)
+				if err != nil {
+					log.Println("上传文件失败", filename, err)
+				} else {
+					log.Println("上传文件完成", filename)
+				}
+			}()
+		}
+
+	}
+	return filename
 }
 
 func (h *MsgHandler) recordHistory(msg *openwechat.Message) error {
@@ -74,6 +153,10 @@ func (h *MsgHandler) recordHistory(msg *openwechat.Message) error {
 		username = user.NickName
 	}
 	content := strings.TrimSpace(openwechat.FormatEmoji(msg.Content))
+	// 带文件的消息需要保存,并替换成路径
+	if msg.HasFile() {
+		msg.Content = h.saveFile(msg)
+	}
 	if h.MsgRedirect != nil {
 		go func() {
 			h.MsgRedirect.RedirectMessage(redirect.Message{
@@ -98,6 +181,7 @@ func (h *MsgHandler) recordHistory(msg *openwechat.Message) error {
 		WechatName: user.NickName,
 		Message:    content,
 		Time:       msg.CreateTime,
+		MsgID:      msg.MsgId,
 	}
 	return h.DB.Save(record).Error
 }
@@ -110,13 +194,18 @@ func (h *MsgHandler) RecordMsgHandler(ctx *openwechat.MessageContext) {
 		return
 	}
 	if err := h.recordHistory(ctx.Message); err != nil {
-		fmt.Println("记录消息出错", err)
+		if errors.Is(err, gorm.ErrDuplicatedKey) {
+
+		} else {
+			log.Println("记录消息出错", err)
+		}
 	}
 	ctx.Abort()
 }
 
 func (h *MsgHandler) dealCommand(ctx *openwechat.MessageContext, command string, content string) {
 	//commands := strings.SplitN(content, " ", 2)
+	_ = ctx.AsRead()
 
 	var ok bool
 	var err error
@@ -149,11 +238,9 @@ func (h *MsgHandler) dealCommand(ctx *openwechat.MessageContext, command string,
 
 	if err != nil {
 		_, _ = ctx.ReplyText("调用插件出错:" + err.Error())
-		_ = ctx.AsRead()
 		ctx.Abort()
 		return
 	} else if ok {
-		_ = ctx.AsRead()
 		ctx.Abort()
 	}
 }
@@ -162,14 +249,14 @@ func (h *MsgHandler) CommandHandler(ctx *openwechat.MessageContext) {
 	if ctx.IsSystem() || ctx.IsSendBySelf() || !ctx.IsText() {
 		return
 	}
+	sender, _ := ctx.Sender()
 	if ctx.IsAt() {
-		sender, _ := ctx.Sender()
 		receiver := sender.MemberList.SearchByUserName(1, ctx.ToUserName)
 		if receiver == nil {
 			return
 		}
 		// 限流
-		if !h.limit.Allow() {
+		if !h.limit.GetOrAdd(sender.UserName).Allow() {
 			ctx.Abort()
 			return
 		}
@@ -195,7 +282,7 @@ func (h *MsgHandler) CommandHandler(ctx *openwechat.MessageContext) {
 		h.dealCommand(ctx, commands[0], content)
 	} else if strings.HasPrefix(ctx.Content, "#") {
 		// 限流
-		if !h.limit.Allow() {
+		if !h.limit.GetOrAdd(sender.UserName).Allow() {
 			ctx.Abort()
 			return
 		}
@@ -219,7 +306,7 @@ func (h *MsgHandler) handlePlugin(content string, ctx *openwechat.MessageContext
 		return
 	}
 	if subCommands[0] != "000000" && !totp.TOTPVerify(h.Secret, 30, subCommands[0]) {
-		fmt.Println("验证失败", time.Now().Format(time.DateTime), subCommands[0])
+		log.Println("验证失败", time.Now().Format(time.DateTime), subCommands[0])
 		return
 	}
 	defer func() {
@@ -443,7 +530,7 @@ func (h *MsgHandler) Invoke(command string, params []string, ctx *openwechat.Mes
 			ok, err = h.PluginManager.Invoke("default", append([]string{command}, params...), h.DB, ctx)
 			if err != nil {
 				// 仅打印，不做特殊处理
-				fmt.Println("调用插件出错:" + err.Error())
+				log.Println("调用插件出错:" + err.Error())
 			}
 		}
 		return ok, nil
