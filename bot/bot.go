@@ -68,7 +68,7 @@ func (b *Manager) Initialized() {
 	defer reloadStorage.Close()
 
 	// 执行热登录
-	if err := b.Bot.HotLogin(reloadStorage, openwechat.NewRetryLoginOption()); err != nil {
+	if err := b.Bot.HotLogin(reloadStorage, NewRetryLoginOption(reloadStorage)); err != nil {
 		log.Fatalln("登录出错", err)
 	}
 	// 获取登陆的用户
@@ -91,14 +91,14 @@ func (b *Manager) Initialized() {
 
 // updateGroup 更新群组信息
 func (b *Manager) updateGroup() ([]Group, []GroupUser) {
-	log.Println("更新群信息")
+	log.Println("刷新群信息")
 	self, err := b.Bot.GetCurrentUser()
 	if err != nil {
 		log.Println("获取当前用户信息失败", err)
 	}
 	newGroups, err := self.Groups(true)
 	if err != nil {
-		log.Println("更新群消息失败", err)
+		log.Println("刷新群信息失败", err)
 		return nil, nil
 	}
 
@@ -110,11 +110,14 @@ func (b *Manager) updateGroup() ([]Group, []GroupUser) {
 
 		groupModel := new(Group)
 		b.DB.Take(groupModel, "g_id=?", group.UserName)
-		if groupModel == nil {
+		if groupModel == nil || groupModel.GID == "" {
 			groupModel = &Group{GID: group.UserName, GroupName: group.NickName, Time: time.Now().Unix()}
 			res := b.DB.Create(groupModel)
-			if res.RowsAffected > 0 {
+			if res.Error != nil {
+				log.Println("更新群信息失败", *groupModel, err)
+			} else if res.RowsAffected > 0 {
 				modifyGroups = append(modifyGroups, *groupModel)
+
 			}
 		} else if groupModel.GroupName != group.NickName {
 			groupModel.GroupName = group.NickName
@@ -125,7 +128,9 @@ func (b *Manager) updateGroup() ([]Group, []GroupUser) {
 					"group_name": groupModel.GroupName,
 					"`time`":     groupModel.Time,
 				})
-			if res.RowsAffected > 0 {
+			if res.Error != nil {
+				log.Println("更新群信息失败", *groupModel, err)
+			} else if res.RowsAffected > 0 {
 				modifyGroups = append(modifyGroups, *groupModel)
 			}
 		}
@@ -138,7 +143,7 @@ func (b *Manager) updateGroup() ([]Group, []GroupUser) {
 			if member.DisplayName != "" {
 				username = member.DisplayName
 			}
-			if groupUser == nil {
+			if groupUser == nil || groupUser.GID == "" {
 				groupUser := GroupUser{
 					GID:        group.UserName,
 					UID:        member.UserName,
@@ -148,7 +153,9 @@ func (b *Manager) updateGroup() ([]Group, []GroupUser) {
 					Time:       time.Now().Unix(),
 				}
 				res := b.DB.Create(groupUser)
-				if res.RowsAffected > 0 {
+				if res.Error != nil {
+					log.Println("更新群成员信息失败", groupUser.GID, groupUser.Username, groupUser.WechatName, err)
+				} else if res.RowsAffected > 0 {
 					modifyUsers = append(modifyUsers, groupUser)
 				}
 			} else if groupUser.Username != username || groupUser.WechatName != member.NickName {
@@ -164,7 +171,9 @@ func (b *Manager) updateGroup() ([]Group, []GroupUser) {
 						"attr_status": groupUser.AttrStatus,
 						"`time`":      groupUser.Time,
 					})
-				if res.RowsAffected > 0 {
+				if res.Error != nil {
+					log.Println("更新群成员信息失败", groupUser.GID, groupUser.Username, groupUser.WechatName, err)
+				} else if res.RowsAffected > 0 {
 					modifyUsers = append(modifyUsers, *groupUser)
 				}
 			}
@@ -199,7 +208,7 @@ func (b *Manager) updateAndSyncModifyUser() {
 }
 
 func (b *Manager) updateMsgHistoryGroup(group Group) {
-	log.Println("修正群历史记录", group.GID, group.GroupName)
+	log.Println("修正群历史记录-群信息", group.GID, group.GroupName)
 	groups := make([]Group, 0)
 	b.DB.Model(&Group{}).Where("group_name = ?", group.GroupName).Find(&groups)
 	if len(groups) > 0 {
@@ -219,6 +228,21 @@ func (b *Manager) updateMsgHistoryGroup(group Group) {
 
 // updateMsgHistoryUser 刷新数据库用户信息
 func (b *Manager) updateMsgHistoryUser(user GroupUser) {
+	log.Println("修正群历史记录-群成员信息", user.GID, user.WechatName, user.Username)
+	users := make([]GroupUser, 0)
+	b.DB.Model(&GroupUser{}).Where("wechat_name = ? and attr_status=?", user.WechatName, user.AttrStatus).Find(&users)
+	if len(users) > 0 {
+		userIds := make([]string, 0, len(users))
+		for _, u := range users {
+			userIds = append(userIds, u.GID)
+		}
+		for _, u := range users {
+			b.DB.Model(&MsgHistory{}).
+				Where("g_id = ? and uid in ?", u.GID, userIds).
+				Update("uid", user.UID)
+		}
+	}
+
 	b.DB.Model(&MsgHistory{}).
 		Where("g_id = ?", user.GID).
 		Where("uid = ?", user.UID).
