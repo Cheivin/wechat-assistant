@@ -68,6 +68,7 @@ func (h *MsgHandler) GetHandler() openwechat.MessageHandler {
 	dispatcher := openwechat.NewMessageMatchDispatcher()
 	// 开启异步消息处理
 	dispatcher.SetAsync(true)
+	dispatcher.OnGroup(h.preParseContent)
 	dispatcher.OnGroup(h.CommandHandler)
 	dispatcher.OnGroup(h.RecordMsgHandler)
 	return dispatcher.AsMessageHandler()
@@ -205,7 +206,6 @@ func (h *MsgHandler) RecordMsgHandler(ctx *openwechat.MessageContext) {
 }
 
 func (h *MsgHandler) dealCommand(ctx *openwechat.MessageContext, command string, content string) {
-	//commands := strings.SplitN(content, " ", 2)
 	_ = ctx.AsRead()
 
 	var ok bool
@@ -246,11 +246,77 @@ func (h *MsgHandler) dealCommand(ctx *openwechat.MessageContext, command string,
 	}
 }
 
+func (h *MsgHandler) preParseContent(ctx *openwechat.MessageContext) {
+	if ctx.IsSystem() || ctx.IsSendBySelf() || !ctx.IsText() {
+		return
+	}
+	ctx.Content = openwechat.FormatEmoji(ctx.Content)
+
+	// 处理引用内容
+	if strings.HasPrefix(ctx.Content, quotePrefix) && strings.Contains(ctx.Content, quoteSuffix) {
+		// 分离引用内容和正文
+		quoteContent := ctx.Content[len(quotePrefix):strings.Index(ctx.Content, quoteSuffix)]
+		// 只保留正文部分
+		content := strings.TrimPrefix(ctx.Content, quotePrefix+quoteContent+quoteSuffix)
+		// 搜索被引用的用户
+		sender, _ := ctx.Sender()
+		group, _ := sender.AsGroup()
+		var quoteUser *openwechat.User
+		// 先搜索目标用户，正文存在@的时候可能与用户不一致，需要搜索用户
+		if u, err := group.SearchMemberByUsername(ctx.ToUserName); err == nil && u != nil {
+			if strings.HasPrefix(quoteContent, u.RemarkName+"：") {
+				quoteContent = strings.TrimSpace(strings.TrimPrefix(quoteContent, u.RemarkName+"："))
+				quoteUser = u
+			} else if strings.HasPrefix(quoteContent, u.DisplayName+"：") {
+				quoteContent = strings.TrimSpace(strings.TrimPrefix(quoteContent, u.DisplayName+"："))
+				quoteUser = u
+			} else if strings.HasPrefix(quoteContent, u.NickName+"：") {
+				quoteContent = strings.TrimSpace(strings.TrimPrefix(quoteContent, u.NickName+"："))
+				quoteUser = u
+			}
+		}
+		// 如果不存在，则根据名称搜索
+		if quoteUser == nil {
+			members, _ := group.Members()
+			// 报错直接中止引用消息处理
+			if members == nil {
+				return
+			}
+			u := members.Search(1, func(u *openwechat.User) bool {
+				return strings.HasPrefix(quoteContent, u.RemarkName+"：") ||
+					strings.HasPrefix(quoteContent, u.DisplayName+"：") ||
+					strings.HasPrefix(quoteContent, u.NickName+"：")
+			}).First()
+			// 未匹配到用户也中止处理
+			if u == nil {
+				return
+			}
+			if strings.HasPrefix(quoteContent, u.RemarkName+"：") {
+				quoteContent = strings.TrimSpace(strings.TrimPrefix(quoteContent, u.RemarkName+"："))
+				quoteUser = u
+			} else if strings.HasPrefix(quoteContent, u.DisplayName+"：") {
+				quoteContent = strings.TrimSpace(strings.TrimPrefix(quoteContent, u.DisplayName+"："))
+				quoteUser = u
+			} else if strings.HasPrefix(quoteContent, u.NickName+"：") {
+				quoteContent = strings.TrimSpace(strings.TrimPrefix(quoteContent, u.NickName+"："))
+				quoteUser = u
+			}
+		}
+		quote := &QuoteMessageInfo{
+			Content: content,
+			Quote:   quoteContent,
+			User:    quoteUser,
+		}
+		ctx.Set(QuoteKey, quote)
+	}
+}
+
 func (h *MsgHandler) CommandHandler(ctx *openwechat.MessageContext) {
 	if ctx.IsSystem() || ctx.IsSendBySelf() || !ctx.IsText() {
 		return
 	}
 	sender, _ := ctx.Sender()
+	msgContent := strings.TrimSpace(ctx.Content)
 	if ctx.IsAt() {
 		receiver := sender.MemberList.SearchByUserName(1, ctx.ToUserName)
 		if receiver == nil {
@@ -266,12 +332,18 @@ func (h *MsgHandler) CommandHandler(ctx *openwechat.MessageContext) {
 			displayName = receiver.First().NickName
 		}
 		var atFlag string
-		msgContent := strings.TrimSpace(openwechat.FormatEmoji(ctx.Content))
 		atName := openwechat.FormatEmoji(displayName)
 		if strings.Contains(msgContent, "\u2005") {
 			atFlag = "@" + atName + "\u2005"
 		} else {
 			atFlag = "@" + atName
+		}
+		var quote *QuoteMessageInfo
+		if val, exist := ctx.Get(QuoteKey); exist {
+			quote = val.(*QuoteMessageInfo)
+		}
+		if quote != nil {
+			msgContent = quote.Content + " " + quote.Quote
 		}
 		content := strings.TrimSpace(strings.TrimPrefix(msgContent, atFlag))
 		commands := strings.SplitN(content, " ", 2)
@@ -287,7 +359,13 @@ func (h *MsgHandler) CommandHandler(ctx *openwechat.MessageContext) {
 			ctx.Abort()
 			return
 		}
-		msgContent := strings.TrimSpace(openwechat.FormatEmoji(ctx.Content))
+		var quote *QuoteMessageInfo
+		if val, exist := ctx.Get(QuoteKey); exist {
+			quote = val.(*QuoteMessageInfo)
+		}
+		if quote != nil {
+			msgContent = quote.Content + " " + quote.Quote
+		}
 		content := strings.TrimSpace(strings.TrimPrefix(msgContent, "#"))
 		commands := strings.SplitN(content, " ", 2)
 		if len(commands) == 1 {
@@ -296,6 +374,41 @@ func (h *MsgHandler) CommandHandler(ctx *openwechat.MessageContext) {
 			content = commands[1]
 		}
 		h.dealCommand(ctx, commands[0], content)
+	} else {
+		var quote *QuoteMessageInfo
+		if val, exist := ctx.Get(QuoteKey); !exist {
+			return
+		} else {
+			quote = val.(*QuoteMessageInfo)
+		}
+		// 判断回复人是否为自己
+		if quote.User.UserName != ctx.Owner().UserName {
+			return
+		}
+		// 限流
+		if !h.limit.GetOrAdd(sender.UserName).Allow() {
+			ctx.Abort()
+			return
+		}
+		content := strings.TrimSpace(quote.Content)
+
+		// 如果正文不存在指令前缀，但引用内容指令前缀，将引用内容的指令前缀作为指令，将引用内容剩余部分追加到正文
+		if !strings.HasPrefix(content, "#") && strings.HasPrefix(quote.Quote, "#") {
+			commands := strings.SplitN(strings.TrimSpace(strings.TrimPrefix(quote.Quote, "#")), " ", 2)
+			if len(commands) != 1 {
+				content = content + " " + commands[1]
+			}
+			h.dealCommand(ctx, commands[0], content)
+		} else { // 否则直接将引用内容加在后面
+			content = strings.TrimSpace(strings.TrimPrefix(content, "#"))
+			commands := strings.SplitN(content, " ", 2)
+			if len(commands) == 1 {
+				content = quote.Quote
+			} else {
+				content = commands[1] + " " + quote.Quote
+			}
+			h.dealCommand(ctx, commands[0], content)
+		}
 	}
 
 }

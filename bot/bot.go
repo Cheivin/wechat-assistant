@@ -234,11 +234,12 @@ func (b *Manager) updateMsgHistoryUser(user GroupUser) {
 	if len(users) > 0 {
 		userIds := make([]string, 0, len(users))
 		for _, u := range users {
-			userIds = append(userIds, u.GID)
+			userIds = append(userIds, u.UID)
 		}
 		for _, u := range users {
 			b.DB.Model(&MsgHistory{}).
-				Where("g_id = ? and uid in ?", u.GID, userIds).
+				Where("g_id in ? and uid in ?", []interface{}{u.GID, user.GID}, userIds).
+				Update("g_id", user.GID).
 				Update("uid", user.UID)
 		}
 	}
