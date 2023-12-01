@@ -3,18 +3,28 @@ package redirect
 type (
 	MsgRedirect interface {
 		RedirectCommand(CommandMessage) bool
-		RedirectMessage(Message) bool
+		RedirectMessage(*Message) bool
 		SetCommandHandler(func(BotCommand))
 	}
 	Message struct {
-		MsgID      string `json:"msgID"`
-		UID        string `json:"uid"`
-		Username   string `json:"username"`
-		GID        string `json:"gid"`
-		GroupName  string `json:"groupName"`
-		RawMessage string `json:"rawMessage,omitempty"`
-		MsgType    int    `json:"msgType"`
-		Time       int64  `json:"time"`
+		MsgID      string  `json:"msgID"`
+		UID        string  `json:"uid"`
+		Username   string  `json:"username"`
+		GID        string  `json:"gid"`
+		GroupName  string  `json:"groupName"`
+		RawMessage string  `json:"rawMessage,omitempty"`
+		MsgType    int     `json:"msgType"`
+		Time       int64   `json:"time"`
+		Quote      *Quote  `json:"quote,omitempty"`
+		Revoke     *Revoke `json:"revoke,omitempty"`
+	}
+	Quote struct {
+		UID   string `json:"uid"`
+		Quote string `json:"quote"`
+	}
+	Revoke struct {
+		OldMsgID   string `json:"oldMsgID"`
+		ReplaceMsg string `json:"replaceMsg"`
 	}
 
 	CommandMessage struct {

@@ -247,10 +247,15 @@ func (s *MsgSender) download(client *resty.Client, filename string, src string) 
 		if err != nil {
 			return io.NopCloser(bytes.NewReader(body)), nil
 		}
-		_, err = out.Write(body)
+		size, err := out.Write(body)
+		_ = out.Close()
 		if err != nil {
-			_ = out.Close()
 			_ = os.Remove(filename)
+			log.Println("写入文件信息出错", filename)
+			return nil, errors.New("获取资源信息出错")
+		}
+		if size == 0 {
+			log.Println("文件长度为0", filename)
 			return nil, errors.New("获取资源信息出错")
 		}
 		return os.Open(filename)

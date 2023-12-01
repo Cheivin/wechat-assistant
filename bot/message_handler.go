@@ -3,6 +3,7 @@ package bot
 import (
 	"bytes"
 	"crypto/md5"
+	"encoding/xml"
 	"errors"
 	"fmt"
 	"github.com/eatmoreapple/openwechat"
@@ -69,16 +70,19 @@ func (h *MsgHandler) GetHandler() openwechat.MessageHandler {
 	// 开启异步消息处理
 	dispatcher.SetAsync(true)
 	dispatcher.OnGroup(h.preParseContent)
+	dispatcher.OnGroup(h.saveMedia)
+	if h.MsgRedirect != nil {
+		dispatcher.OnGroup(h.redirectMsg)
+	}
 	dispatcher.OnGroup(h.CommandHandler)
 	dispatcher.OnGroup(h.RecordMsgHandler)
 	return dispatcher.AsMessageHandler()
 }
 
-func (h *MsgHandler) saveFile(msg *openwechat.Message) string {
-	defer func() {
-		_ = msg.AsRead()
-	}()
-
+func (h *MsgHandler) saveMedia(msg *openwechat.MessageContext) {
+	if !msg.HasFile() {
+		return
+	}
 	var buf bytes.Buffer
 	filename := msg.FileName
 	if filename == "" {
@@ -91,7 +95,8 @@ func (h *MsgHandler) saveFile(msg *openwechat.Message) string {
 		} else if msg.IsPicture() || msg.IsEmoticon() {
 			if err := msg.SaveFile(&buf); err != nil {
 				log.Println("获取文件失败", err)
-				return ""
+				msg.Content = strings.TrimSpace(filename)
+				return
 			}
 			filetype := http.DetectContentType(buf.Bytes())
 			filetype = filetype[6:]
@@ -119,12 +124,14 @@ func (h *MsgHandler) saveFile(msg *openwechat.Message) string {
 		}
 		if err := os.WriteFile(savePath, buf.Bytes(), 0666); err != nil {
 			log.Println("写入文件失败", savePath, err)
-			return filename
+			msg.Content = strings.TrimSpace(filename)
+			return
 		}
 	} else {
 		if err := msg.SaveFileToLocal(savePath); err != nil {
 			log.Println("保存文件失败", savePath, err)
-			return filename
+			msg.Content = strings.TrimSpace(filename)
+			return
 		}
 		if h.Uploader != nil {
 			go func() {
@@ -136,44 +143,88 @@ func (h *MsgHandler) saveFile(msg *openwechat.Message) string {
 				}
 			}()
 		}
-
 	}
-	return filename
+	msg.Content = strings.TrimSpace(filename)
 }
 
-func (h *MsgHandler) recordHistory(msg *openwechat.Message) error {
-	group, err := msg.Sender()
-	if err != nil {
-		return err
+func (h *MsgHandler) redirectMsg(ctx *openwechat.MessageContext) {
+	if ctx.IsSystem() {
+		return
 	}
-	user, err := msg.SenderInGroup()
+	group, err := ctx.Sender()
 	if err != nil {
-		return err
+		log.Println("获取消息来源群组信息失败", err)
+		return
+	}
+	if ctx.IsSendBySelf() {
+		groups, _ := ctx.Owner().Groups()
+		group = groups.SearchByUserName(1, ctx.ToUserName).First().User
+	}
+	user, err := ctx.SenderInGroup()
+	if err != nil {
+		log.Println("获取消息来源群成员信息失败", err)
+		return
 	}
 	username := user.DisplayName
 	if user.DisplayName == "" {
 		username = user.NickName
 	}
-	content := strings.TrimSpace(openwechat.FormatEmoji(msg.Content))
-	// 带文件的消息需要保存,并替换成路径
-	if msg.HasFile() {
-		msg.Content = h.saveFile(msg)
-		content = msg.Content
+	msg := &redirect.Message{
+		MsgID:      ctx.MsgId,
+		UID:        user.UserName,
+		Username:   username,
+		GID:        group.UserName,
+		GroupName:  group.NickName,
+		RawMessage: strings.TrimSpace(ctx.Content),
+		MsgType:    int(ctx.MsgType),
+		Time:       ctx.CreateTime,
 	}
-	if h.MsgRedirect != nil {
-		go func() {
-			h.MsgRedirect.RedirectMessage(redirect.Message{
-				MsgID:      msg.MsgId,
-				UID:        user.UserName,
-				Username:   username,
-				GID:        group.UserName,
-				GroupName:  group.NickName,
-				RawMessage: content,
-				MsgType:    int(msg.MsgType),
-				Time:       msg.CreateTime,
-			})
-		}()
+	if quote, exist := ctx.Get(QuoteKey); exist {
+		q := quote.(*QuoteMessageInfo)
+		msg.RawMessage = q.Content
+		msg.Quote = &redirect.Quote{
+			Quote: q.Quote,
+			UID:   q.User.UserName,
+		}
 	}
+	if ctx.IsRecalled() {
+		var revokeMsg SysMsg
+		err := xml.Unmarshal([]byte(ctx.Content), &revokeMsg)
+		if err == nil {
+			msg.Revoke = &redirect.Revoke{
+				OldMsgID:   revokeMsg.RevokeMsg.MsgID,
+				ReplaceMsg: revokeMsg.RevokeMsg.ReplaceMsg,
+			}
+		}
+	}
+
+	go func(msg *redirect.Message) {
+		h.MsgRedirect.RedirectMessage(msg)
+	}(msg)
+}
+
+func (h *MsgHandler) RecordMsgHandler(ctx *openwechat.MessageContext) {
+	_ = ctx.AsRead()
+	ctx.Abort()
+	if ctx.IsSystem() || ctx.IsSendBySelf() {
+		return
+	}
+	msg := ctx.Message
+	group, err := msg.Sender()
+	if err != nil {
+		log.Println("获取消息来源群组信息失败", err)
+		return
+	}
+	user, err := msg.SenderInGroup()
+	if err != nil {
+		log.Println("获取消息来源群成员信息失败", err)
+		return
+	}
+	username := user.DisplayName
+	if user.DisplayName == "" {
+		username = user.NickName
+	}
+	content := strings.TrimSpace(msg.Content)
 	record := &MsgHistory{
 		GID:        group.UserName,
 		UID:        user.UserName,
@@ -186,23 +237,11 @@ func (h *MsgHandler) recordHistory(msg *openwechat.Message) error {
 		Time:       msg.CreateTime,
 		MsgID:      msg.MsgId,
 	}
-	return h.DB.Save(record).Error
-}
-
-func (h *MsgHandler) RecordMsgHandler(ctx *openwechat.MessageContext) {
-	if ctx.IsSystem() {
-		return
-	}
-	if ctx.IsSendBySelf() {
-		return
-	}
-	if err := h.recordHistory(ctx.Message); err != nil {
+	if err = h.DB.Save(record).Error; err != nil {
 		if !errors.Is(err, gorm.ErrDuplicatedKey) {
-			_ = ctx.AsRead()
 			log.Println("记录消息出错", err)
 		}
 	}
-	ctx.Abort()
 }
 
 func (h *MsgHandler) dealCommand(ctx *openwechat.MessageContext, command string, content string) {
@@ -238,7 +277,7 @@ func (h *MsgHandler) dealCommand(ctx *openwechat.MessageContext, command string,
 	}
 
 	if err != nil {
-		_, _ = ctx.ReplyText("调用插件出错:" + err.Error())
+		_, _ = ctx.ReplyText(err.Error())
 		ctx.Abort()
 		return
 	} else if ok {
@@ -247,11 +286,20 @@ func (h *MsgHandler) dealCommand(ctx *openwechat.MessageContext, command string,
 }
 
 func (h *MsgHandler) preParseContent(ctx *openwechat.MessageContext) {
-	if ctx.IsSystem() || ctx.IsSendBySelf() || !ctx.IsText() {
+	if ctx.IsSystem() || !ctx.IsText() {
 		return
 	}
-	ctx.Content = openwechat.FormatEmoji(ctx.Content)
+	sender, _ := ctx.Sender()
+	group, _ := sender.AsGroup()
+	if ctx.IsSendBySelf() {
+		groups, _ := ctx.Owner().Groups()
+		group = groups.SearchByUserName(1, ctx.ToUserName).First()
+	}
+	if group == nil {
+		return
+	}
 
+	ctx.Content = openwechat.FormatEmoji(ctx.Content)
 	// 处理引用内容
 	if strings.HasPrefix(ctx.Content, quotePrefix) && strings.Contains(ctx.Content, quoteSuffix) {
 		// 分离引用内容和正文
@@ -259,8 +307,6 @@ func (h *MsgHandler) preParseContent(ctx *openwechat.MessageContext) {
 		// 只保留正文部分
 		content := strings.TrimPrefix(ctx.Content, quotePrefix+quoteContent+quoteSuffix)
 		// 搜索被引用的用户
-		sender, _ := ctx.Sender()
-		group, _ := sender.AsGroup()
 		var quoteUser *openwechat.User
 		// 先搜索目标用户，正文存在@的时候可能与用户不一致，需要搜索用户
 		if u, err := group.SearchMemberByUsername(ctx.ToUserName); err == nil && u != nil {
@@ -624,7 +670,7 @@ func (h *MsgHandler) Invoke(command string, params []string, ctx *openwechat.Mes
 			if user.DisplayName == "" {
 				username = user.NickName
 			}
-			content := strings.TrimSpace(openwechat.FormatEmoji(msg.Content))
+			content := strings.TrimSpace(msg.Content)
 			ok := h.MsgRedirect.RedirectCommand(redirect.CommandMessage{
 				Message: redirect.Message{
 					MsgID:      msg.MsgId,

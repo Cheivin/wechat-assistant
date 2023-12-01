@@ -8,6 +8,7 @@ import (
 	"github.com/eatmoreapple/openwechat"
 	"github.com/go-resty/resty/v2"
 	"gorm.io/gorm"
+	"log"
 	"strings"
 	"wechat-assistant/redirect"
 )
@@ -125,9 +126,14 @@ func (p *RemotePlugin) Handle(_ *gorm.DB, ctx *openwechat.MessageContext) (bool,
 
 	resp, err := p.client.R().SetBody(msg).Post(p.info.Code)
 	if err != nil {
+		log.Println("远程插件调用失败", err)
 		return false, err
 	}
-
+	if !resp.IsSuccess() {
+		err := errors.New(resp.Status())
+		log.Println("远程插件调用失败", err)
+		return false, err
+	}
 	response := new(remotePluginResponse)
 	err = json.Unmarshal(resp.Body(), response)
 	if err != nil {

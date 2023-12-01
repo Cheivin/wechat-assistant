@@ -73,7 +73,7 @@ func (r *MQTTRedirect) RedirectCommand(message CommandMessage) bool {
 	return token.Wait()
 }
 
-func (r *MQTTRedirect) RedirectMessage(message Message) bool {
+func (r *MQTTRedirect) RedirectMessage(message *Message) bool {
 	bytes, _ := json.Marshal(message)
 	topic := r.Prefix + "broadcast/msg/group/" + message.GID
 	token := r.client.Publish(topic, 0, false, bytes)
