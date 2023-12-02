@@ -69,13 +69,14 @@ func (h *MsgHandler) GetHandler() openwechat.MessageHandler {
 	dispatcher := openwechat.NewMessageMatchDispatcher()
 	// 开启异步消息处理
 	dispatcher.SetAsync(true)
+	dispatcher.OnGroup(h.checkDuplicate)
 	dispatcher.OnGroup(h.preParseContent)
 	dispatcher.OnGroup(h.saveMedia)
 	if h.MsgRedirect != nil {
 		dispatcher.OnGroup(h.redirectMsg)
 	}
-	dispatcher.OnGroup(h.CommandHandler)
 	dispatcher.OnGroup(h.RecordMsgHandler)
+	dispatcher.OnGroup(h.CommandHandler)
 	return dispatcher.AsMessageHandler()
 }
 
@@ -205,7 +206,6 @@ func (h *MsgHandler) redirectMsg(ctx *openwechat.MessageContext) {
 
 func (h *MsgHandler) RecordMsgHandler(ctx *openwechat.MessageContext) {
 	_ = ctx.AsRead()
-	ctx.Abort()
 	if ctx.IsSystem() || ctx.IsSendBySelf() {
 		return
 	}
@@ -245,8 +245,6 @@ func (h *MsgHandler) RecordMsgHandler(ctx *openwechat.MessageContext) {
 }
 
 func (h *MsgHandler) dealCommand(ctx *openwechat.MessageContext, command string, content string) {
-	_ = ctx.AsRead()
-
 	var ok bool
 	var err error
 	switch command {
@@ -282,6 +280,23 @@ func (h *MsgHandler) dealCommand(ctx *openwechat.MessageContext, command string,
 		return
 	} else if ok {
 		ctx.Abort()
+	}
+}
+
+func (h *MsgHandler) checkDuplicate(ctx *openwechat.MessageContext) {
+	if ctx.IsSystem() || ctx.IsNotify() || ctx.IsSendBySelf() {
+		return
+	}
+	var msgId string
+	h.DB.Model(MsgHistory{}).
+		Select("msg_id").
+		Where("msg_id =?", ctx.MsgId).
+		Limit(1).
+		Take(&msgId)
+	if msgId != "" {
+		ctx.Abort()
+		log.Println("跳过重复消息", msgId)
+		return
 	}
 }
 
