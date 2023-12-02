@@ -109,7 +109,7 @@ func (s *MsgSender) SendGroupMediaMsgByGid(gid string, mediaType int, src string
 	if group == nil {
 		return "", errors.New("群不存在")
 	}
-	return s.sendMediaMessage(group, mediaType, src, filename, prompt)
+	return s.SendGroupMediaMsg(group, mediaType, src, filename, prompt)
 }
 
 func (s *MsgSender) SendGroupMediaMsgByGroupName(gid string, mediaType int, src string, filename string, prompt string) (string, error) {
@@ -122,41 +122,28 @@ func (s *MsgSender) SendGroupMediaMsgByGroupName(gid string, mediaType int, src 
 	if group == nil {
 		return "", errors.New("群不存在")
 	}
-	return s.sendMediaMessage(group, mediaType, src, filename, prompt)
+	return s.SendGroupMediaMsg(group, mediaType, src, filename, prompt)
 }
 
 func (s *MsgSender) SendGroupMediaMsg(group *openwechat.Group, mediaType int, src string, filename string, prompt string) (string, error) {
-	return s.sendMediaMessage(group, mediaType, src, filename, prompt)
-}
-
-func (s *MsgSender) sendMediaMessage(group *openwechat.Group, mediaType int, src string, filename string, prompt string) (string, error) {
 	self, err := s.getSelf()
 	if err != nil {
 		return "", err
 	}
 
-	// 限流最大等待
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
-	_ = s.limit.Wait(ctx) // 忽略限流，只是为了人为等待
-	cancel()
-
-	var promptSent *openwechat.SentMessage
 	switch mediaType {
 	case 2:
 		if filename == "" {
 			filename = fmt.Sprintf("%x.jpg", md5.Sum([]byte(src)))
 		}
-		if prompt != "" {
-			promptSent, _ = self.SendTextToGroup(group, prompt)
-			defer func() {
-				_ = promptSent.Revoke()
-			}()
-		}
-		reader, err := s.download(s.Resty, filename, src)
+		reader, promptSent, err := s.prepareFile(self, group, src, filename, prompt)
 		if err != nil {
 			return "", err
 		}
 		defer func() {
+			if promptSent != nil {
+				_ = promptSent.Revoke()
+			}
 			_ = reader.Close()
 		}()
 		if sent, err := self.SendImageToGroup(group, reader); err != nil {
@@ -168,17 +155,14 @@ func (s *MsgSender) sendMediaMessage(group *openwechat.Group, mediaType int, src
 		if filename == "" {
 			filename = fmt.Sprintf("%x.mp4", md5.Sum([]byte(src)))
 		}
-		if prompt != "" {
-			promptSent, _ = self.SendTextToGroup(group, prompt)
-			defer func() {
-				_ = promptSent.Revoke()
-			}()
-		}
-		reader, err := s.download(s.Resty, filename, src)
+		reader, promptSent, err := s.prepareFile(self, group, src, filename, prompt)
 		if err != nil {
 			return "", err
 		}
 		defer func() {
+			if promptSent != nil {
+				_ = promptSent.Revoke()
+			}
 			_ = reader.Close()
 		}()
 		if sent, err := self.SendVideoToGroup(group, reader); err != nil {
@@ -190,18 +174,14 @@ func (s *MsgSender) sendMediaMessage(group *openwechat.Group, mediaType int, src
 		if filename == "" {
 			filename = fmt.Sprintf("%x", md5.Sum([]byte(src)))
 		}
-		if prompt != "" {
-			promptSent, _ = self.SendTextToGroup(group, prompt)
-			defer func() {
-				_ = promptSent.Revoke()
-			}()
-		}
-		reader, err := s.download(s.Resty, filename, src)
+		reader, promptSent, err := s.prepareFile(self, group, src, filename, prompt)
 		if err != nil {
 			return "", err
 		}
 		defer func() {
-
+			if promptSent != nil {
+				_ = promptSent.Revoke()
+			}
 			_ = reader.Close()
 		}()
 		if sent, err := self.SendFileToGroup(group, reader); err != nil {
@@ -212,6 +192,30 @@ func (s *MsgSender) sendMediaMessage(group *openwechat.Group, mediaType int, src
 	default:
 		return "", errors.New("暂不支持该类型")
 	}
+
+}
+
+func (s *MsgSender) prepareFile(self *openwechat.Self, group *openwechat.Group, src string, filename string, prompt string) (reader io.ReadCloser, promptSent *openwechat.SentMessage, err error) {
+	if prompt != "" {
+		// 限流等待
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*3)
+		_ = s.limit.Wait(ctx) // 忽略限流，只是为了人为等待
+		cancel()
+		promptSent, _ = self.SendTextToGroup(group, prompt)
+		defer func() {
+			_ = promptSent.Revoke()
+		}()
+	}
+	// 下载文件
+	reader, err = s.download(s.Resty, filename, src)
+	if err != nil {
+		return nil, nil, err
+	}
+	// 限流等待
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*20)
+	_ = s.limit.WaitN(ctx, 5) // 忽略限流，只是为了人为等待
+	cancel()
+	return reader, promptSent, nil
 }
 
 func (s *MsgSender) getSelf() (*openwechat.Self, error) {
