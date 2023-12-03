@@ -228,7 +228,7 @@ func (s *MsgSender) getSelf() (*openwechat.Self, error) {
 func (s *MsgSender) download(client *resty.Client, filename string, src string) (io.ReadCloser, error) {
 	filename = filepath.Join(s.CachePath, time.Now().Format("2006/01/02"), filename)
 	_ = os.MkdirAll(filepath.Dir(filename), os.ModePerm)
-	if strings.HasPrefix("BASE64:", src) {
+	if strings.HasPrefix(src, "BASE64:") {
 		log.Println("转换BASE64资源", filename)
 		srcBytes, err := base64.RawStdEncoding.DecodeString(strings.TrimPrefix(src, "BASE64:"))
 		if err != nil {
