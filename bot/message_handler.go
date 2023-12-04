@@ -21,28 +21,31 @@ import (
 	"wechat-assistant/util/totp"
 )
 
-type MsgHistory struct {
-	ID         uint   `gorm:"primaryKey;autoIncrement"`
-	GID        string `gorm:"type:varchar(255)"`
-	UID        string `gorm:"type:varchar(255)"`
-	AttrStatus int64  `gorm:"type:int(20)"`
-	MsgType    int    `gorm:"type:int(2)"`
-	GroupName  string `gorm:"type:varchar(255)"`
-	Username   string `gorm:"type:varchar(255)"`
-	WechatName string `gorm:"type:varchar(255)"`
-	Message    string ``
-	Time       int64  `gorm:"type:int(20)"`
-	MsgID      string `gorm:"type:varchar(50)"`
-}
+type (
+	MsgHistory struct {
+		ID         uint   `gorm:"primaryKey;autoIncrement"`
+		GID        string `gorm:"type:varchar(255)"`
+		UID        string `gorm:"type:varchar(255)"`
+		AttrStatus int64  `gorm:"type:int(20)"`
+		MsgType    int    `gorm:"type:int(2)"`
+		GroupName  string `gorm:"type:varchar(255)"`
+		Username   string `gorm:"type:varchar(255)"`
+		WechatName string `gorm:"type:varchar(255)"`
+		Message    string ``
+		Time       int64  `gorm:"type:int(20)"`
+		MsgID      string `gorm:"type:varchar(50)"`
+	}
+)
 
 type MsgHandler struct {
-	Secret        string               `value:"bot.secret"`
-	FilesPath     string               `value:"bot.files"`
-	DB            *gorm.DB             `aware:"db"`
-	PluginManager *plugin.Manager      `aware:""`
-	MsgRedirect   redirect.MsgRedirect `aware:"omitempty"`
-	Uploader      *redirect.S3Uploader `aware:"omitempty"`
-	limit         *limiter.Limiter
+	Secret                  string                   `value:"bot.secret"`
+	FilesPath               string                   `value:"bot.files"`
+	DB                      *gorm.DB                 `aware:"db"`
+	PluginManager           *plugin.Manager          `aware:""`
+	KeywordForbiddenManager *KeywordForbiddenManager `aware:""`
+	MsgRedirect             redirect.MsgRedirect     `aware:"omitempty"`
+	Uploader                *redirect.S3Uploader     `aware:"omitempty"`
+	limit                   *limiter.Limiter
 }
 
 func (h *MsgHandler) BeanName() string {
@@ -252,7 +255,12 @@ func (h *MsgHandler) dealCommand(ctx *openwechat.MessageContext, command string,
 		if content == "" {
 			return
 		}
-		ok, err = h.handlePlugin(content, ctx)
+		ok, err = h.PluginManager.HandleManage(content, ctx)
+	case "禁用词":
+		if content == "" {
+			return
+		}
+		ok, err = h.KeywordForbiddenManager.HandleManage(content, ctx)
 	case "help":
 		addons, _ := h.PluginManager.List(false)
 		switch len(*addons) {
@@ -267,6 +275,15 @@ func (h *MsgHandler) dealCommand(ctx *openwechat.MessageContext, command string,
 		}
 		ok, err = true, nil
 	default:
+		// 检查关键词
+		ok, err := h.KeywordForbiddenManager.CheckKeyword(ctx, command)
+		if err != nil {
+			log.Println("检查关键词出错", command, err)
+			return
+		} else if !ok {
+			log.Println("关键词已拦截", command, err)
+			return
+		}
 		if content == "" {
 			ok, err = h.Invoke(command, []string{}, ctx)
 		} else {
@@ -472,181 +489,6 @@ func (h *MsgHandler) CommandHandler(ctx *openwechat.MessageContext) {
 		}
 	}
 
-}
-
-func (h *MsgHandler) handlePlugin(content string, ctx *openwechat.MessageContext) (ok bool, err error) {
-	// xxxxxx 指令 参数...
-	subCommands := strings.SplitN(content, " ", 3)
-	if len(subCommands) < 2 {
-		return
-	}
-	if subCommands[0] != "000000" && !totp.TOTPVerify(h.Secret, 30, subCommands[0]) {
-		log.Println("验证失败", time.Now().Format(time.DateTime), subCommands[0])
-		return
-	}
-	defer func() {
-		if e := recover(); e != nil {
-			switch e.(type) {
-			case error:
-				err = e.(error)
-			case string:
-				err = errors.New(e.(string))
-			default:
-				err = errors.New("插件操作出错")
-			}
-		}
-	}()
-	commands := subCommands[1:]
-	switch commands[0] {
-	case "install":
-		if len(commands) == 1 {
-			return false, errors.New("安装插件出错:请输入插件路径")
-		}
-		params := strings.SplitN(commands[1], " ", 3)
-		pluginPath := ""
-		if len(params) == 1 {
-			pluginPath = params[0]
-		}
-
-		plugin, err := h.PluginManager.Install(pluginPath)
-		if err != nil {
-			return false, errors.New("安装插件出错:" + err.Error())
-		}
-
-		description := "插件安装成功，信息如下:\n"
-		info := plugin.Info()
-		description += "ID:" + plugin.ID() + "\n"
-		if info.Keyword != "" {
-			description += "默认唤醒词:" + info.Keyword + "\n"
-		}
-		if info.Description != "" {
-			description += "说明:" + info.Description + "\n"
-		}
-		_, _ = ctx.ReplyText(description)
-		return true, nil
-	case "update":
-		if len(commands) == 1 {
-			return false, errors.New("更新插件出错:请输入插件ID")
-		}
-		params := strings.SplitN(commands[1], " ", 3)
-		id := params[0]
-		pluginPath := ""
-		if len(params) > 1 {
-			pluginPath = params[1]
-		}
-		err := h.PluginManager.Update(id, pluginPath)
-		if err != nil {
-			return false, errors.New("更新插件出错:" + err.Error())
-		}
-		_, _ = ctx.ReplyText(fmt.Sprintf("插件%s更新完成", id))
-		return true, nil
-	case "bind":
-		if len(commands) == 1 {
-			return false, errors.New("绑定插件出错:请输入插件ID和唤醒词")
-		}
-		params := strings.SplitN(commands[1], " ", 3)
-		id := ""
-		keyword := ""
-		force := false
-		switch len(params) {
-		case 1:
-			id = params[0]
-		case 2:
-			id = params[0]
-			keyword = params[1]
-		default:
-			id = params[0]
-			keyword = params[1]
-			force = "force" == params[2]
-		}
-		plugin, err := h.PluginManager.Load(id)
-		if err != nil {
-			return false, err
-		}
-		err = h.PluginManager.Bind(keyword, plugin, force)
-
-		info := plugin.Info()
-		description := "插件绑定成功，信息如下:\n"
-		description += "ID:" + plugin.ID() + "\n"
-		description += "唤醒词:" + info.Keyword + "\n"
-		if info.Description != "" {
-			description += "说明:" + info.Description + "\n"
-		}
-		_, _ = ctx.ReplyText(description)
-		return true, err
-	case "unbind":
-		if len(commands) == 1 {
-			return false, errors.New("解绑插件出错:请输入唤醒词")
-		}
-		keyword := strings.SplitN(commands[1], " ", 2)[0]
-		ok, err := h.PluginManager.Unbind(keyword)
-		if !ok {
-			return true, errors.New(fmt.Sprintf("解绑插件出错:唤醒词[%s]未绑定插件", keyword))
-		}
-		if err != nil {
-			return true, errors.New(fmt.Sprintf("解绑插件出错:%s", err.Error()))
-		}
-		_, _ = ctx.ReplyText("插件解绑成功")
-		return true, nil
-	case "reload":
-		if len(commands) == 1 {
-			return false, errors.New("重载插件出错:请输入插件ID")
-		}
-		params := strings.SplitN(commands[1], " ", 2)
-		id := params[0]
-		if err := h.PluginManager.Reload(id); err != nil {
-			return false, errors.New("重载插件出错:" + err.Error())
-		}
-		_, _ = ctx.ReplyText(fmt.Sprintf("插件%s重载完成", id))
-		return true, nil
-	case "uninstall":
-		if len(commands) == 1 {
-			return false, errors.New("请输入插件ID")
-		}
-		id := strings.SplitN(commands[1], " ", 2)[0]
-		if ok, err := h.PluginManager.Uninstall(id); err != nil {
-			return false, errors.New("卸载插件出错:" + err.Error())
-		} else if ok {
-			_, _ = ctx.ReplyText("插件卸载成功")
-		} else {
-			_, _ = ctx.ReplyText("未找到插件信息")
-		}
-		return true, nil
-	case "list":
-		fromDB := false
-		if len(commands) > 1 {
-			fromDB = "installed" == strings.SplitN(commands[1], " ", 2)[0]
-		}
-		addons, err := h.PluginManager.List(fromDB)
-		if err != nil {
-			return false, errors.New("查询已安装的插件列表出错")
-		}
-		switch len(*addons) {
-		case 0:
-			_, _ = ctx.ReplyText("当前没有安装插件")
-		default:
-			msg := "已安装的插件信息如下:\n"
-			for _, v := range *addons {
-				if v.BindKeyword == "" {
-					msg += fmt.Sprintf("ID:%s(未绑定)\n", v.ID)
-					if v.Keyword != "" {
-						msg += fmt.Sprintf("--默认唤醒词:[%s]\n", v.Keyword)
-					}
-					if v.Description != "" {
-						msg += fmt.Sprintf("--说明:%s\n", v.Description)
-					}
-				} else {
-					msg += fmt.Sprintf("ID:%s, 唤醒词:[%s]\n", v.ID, v.Keyword)
-					if v.Description != "" {
-						msg += fmt.Sprintf("--说明:%s\n", v.Description)
-					}
-				}
-			}
-			_, _ = ctx.ReplyText(msg)
-		}
-		return true, nil
-	}
-	return false, nil
 }
 
 func (h *MsgHandler) Invoke(command string, params []string, ctx *openwechat.MessageContext) (bool, error) {

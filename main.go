@@ -126,6 +126,7 @@ func main() {
 
 	container.Provide(lock.DBLocker{}).
 		Provide(plugin.Manager{}).
+		Provide(bot.KeywordForbiddenManager{}).
 		Provide(bot.MsgHandler{}).
 		Provide(redirect.MsgSender{}).
 		Provide(bot.Manager{}).

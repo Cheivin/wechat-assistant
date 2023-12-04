@@ -12,9 +12,11 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 	"wechat-assistant/interpreter"
 	"wechat-assistant/lock"
 	"wechat-assistant/redirect"
+	"wechat-assistant/util/totp"
 )
 
 type (
@@ -38,6 +40,7 @@ type (
 
 type Manager struct {
 	container di.DI
+	Secret    string              `value:"bot.secret"`
 	DB        *gorm.DB            `aware:"db"`
 	Locker    lock.Locker         `aware:""`
 	Resty     *resty.Client       `aware:"resty"`
@@ -118,6 +121,181 @@ func (m *Manager) listLoaded() []BindInfo {
 		})
 	}
 	return loaded
+}
+
+func (m *Manager) HandleManage(content string, ctx *openwechat.MessageContext) (ok bool, err error) {
+	// xxxxxx 指令 参数...
+	subCommands := strings.SplitN(content, " ", 3)
+	if len(subCommands) < 2 {
+		return
+	}
+	if subCommands[0] != "000000" && !totp.TOTPVerify(m.Secret, 30, subCommands[0]) {
+		log.Println("验证失败", time.Now().Format(time.DateTime), subCommands[0])
+		return
+	}
+	defer func() {
+		if e := recover(); e != nil {
+			switch e.(type) {
+			case error:
+				err = e.(error)
+			case string:
+				err = errors.New(e.(string))
+			default:
+				err = errors.New("插件操作出错")
+			}
+		}
+	}()
+	commands := subCommands[1:]
+	switch commands[0] {
+	case "install":
+		if len(commands) == 1 {
+			return false, errors.New("安装插件出错:请输入插件路径")
+		}
+		params := strings.SplitN(commands[1], " ", 3)
+		pluginPath := ""
+		if len(params) == 1 {
+			pluginPath = params[0]
+		}
+
+		plugin, err := m.Install(pluginPath)
+		if err != nil {
+			return false, errors.New("安装插件出错:" + err.Error())
+		}
+
+		description := "插件安装成功，信息如下:\n"
+		info := plugin.Info()
+		description += "ID:" + plugin.ID() + "\n"
+		if info.Keyword != "" {
+			description += "默认唤醒词:" + info.Keyword + "\n"
+		}
+		if info.Description != "" {
+			description += "说明:" + info.Description + "\n"
+		}
+		_, _ = ctx.ReplyText(description)
+		return true, nil
+	case "update":
+		if len(commands) == 1 {
+			return false, errors.New("更新插件出错:请输入插件ID")
+		}
+		params := strings.SplitN(commands[1], " ", 3)
+		id := params[0]
+		pluginPath := ""
+		if len(params) > 1 {
+			pluginPath = params[1]
+		}
+		err := m.Update(id, pluginPath)
+		if err != nil {
+			return false, errors.New("更新插件出错:" + err.Error())
+		}
+		_, _ = ctx.ReplyText(fmt.Sprintf("插件%s更新完成", id))
+		return true, nil
+	case "bind":
+		if len(commands) == 1 {
+			return false, errors.New("绑定插件出错:请输入插件ID和唤醒词")
+		}
+		params := strings.SplitN(commands[1], " ", 3)
+		id := ""
+		keyword := ""
+		force := false
+		switch len(params) {
+		case 1:
+			id = params[0]
+		case 2:
+			id = params[0]
+			keyword = params[1]
+		default:
+			id = params[0]
+			keyword = params[1]
+			force = "force" == params[2]
+		}
+		plugin, err := m.Load(id)
+		if err != nil {
+			return false, err
+		}
+		err = m.Bind(keyword, plugin, force)
+
+		info := plugin.Info()
+		description := "插件绑定成功，信息如下:\n"
+		description += "ID:" + plugin.ID() + "\n"
+		description += "唤醒词:" + info.Keyword + "\n"
+		if info.Description != "" {
+			description += "说明:" + info.Description + "\n"
+		}
+		_, _ = ctx.ReplyText(description)
+		return true, err
+	case "unbind":
+		if len(commands) == 1 {
+			return false, errors.New("解绑插件出错:请输入唤醒词")
+		}
+		keyword := strings.SplitN(commands[1], " ", 2)[0]
+		ok, err := m.Unbind(keyword)
+		if !ok {
+			return true, errors.New(fmt.Sprintf("解绑插件出错:唤醒词[%s]未绑定插件", keyword))
+		}
+		if err != nil {
+			return true, errors.New(fmt.Sprintf("解绑插件出错:%s", err.Error()))
+		}
+		_, _ = ctx.ReplyText("插件解绑成功")
+		return true, nil
+	case "reload":
+		if len(commands) == 1 {
+			return false, errors.New("重载插件出错:请输入插件ID")
+		}
+		params := strings.SplitN(commands[1], " ", 2)
+		id := params[0]
+		if err := m.Reload(id); err != nil {
+			return false, errors.New("重载插件出错:" + err.Error())
+		}
+		_, _ = ctx.ReplyText(fmt.Sprintf("插件%s重载完成", id))
+		return true, nil
+	case "uninstall":
+		if len(commands) == 1 {
+			return false, errors.New("请输入插件ID")
+		}
+		id := strings.SplitN(commands[1], " ", 2)[0]
+		if ok, err := m.Uninstall(id); err != nil {
+			return false, errors.New("卸载插件出错:" + err.Error())
+		} else if ok {
+			_, _ = ctx.ReplyText("插件卸载成功")
+		} else {
+			_, _ = ctx.ReplyText("未找到插件信息")
+		}
+		return true, nil
+	case "list":
+		fromDB := false
+		if len(commands) > 1 {
+			fromDB = "installed" == strings.SplitN(commands[1], " ", 2)[0]
+		}
+		addons, err := m.List(fromDB)
+		if err != nil {
+			return false, errors.New("查询已安装的插件列表出错")
+		}
+		switch len(*addons) {
+		case 0:
+			_, _ = ctx.ReplyText("当前没有安装插件")
+		default:
+			msg := "已安装的插件信息如下:\n"
+			for _, v := range *addons {
+				if v.BindKeyword == "" {
+					msg += fmt.Sprintf("ID:%s(未绑定)\n", v.ID)
+					if v.Keyword != "" {
+						msg += fmt.Sprintf("--默认唤醒词:[%s]\n", v.Keyword)
+					}
+					if v.Description != "" {
+						msg += fmt.Sprintf("--说明:%s\n", v.Description)
+					}
+				} else {
+					msg += fmt.Sprintf("ID:%s, 唤醒词:[%s]\n", v.ID, v.Keyword)
+					if v.Description != "" {
+						msg += fmt.Sprintf("--说明:%s\n", v.Description)
+					}
+				}
+			}
+			_, _ = ctx.ReplyText(msg)
+		}
+		return true, nil
+	}
+	return false, nil
 }
 
 // 回收销毁已加载但未绑定的插件

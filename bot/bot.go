@@ -218,12 +218,15 @@ func (b *Manager) updateMsgHistoryGroup(group Group) {
 		}
 		b.DB.Model(&MsgHistory{}).
 			Where("g_id in ?", groupIds).
-			Update("g_id", group.GID)
+			Updates(map[string]interface{}{
+				"g_id":       group.GID,
+				"group_name": group.GroupName,
+			})
+	} else {
+		b.DB.Model(&MsgHistory{}).
+			Where("g_id = ?", group.GID).
+			Update("group_name", group.GroupName)
 	}
-
-	b.DB.Model(&MsgHistory{}).
-		Where("g_id = ?", group.GID).
-		Update("group_name", group.GroupName)
 }
 
 // updateMsgHistoryUser 刷新数据库用户信息
@@ -238,7 +241,7 @@ func (b *Manager) updateMsgHistoryUser(user GroupUser) {
 		}
 		for _, u := range users {
 			b.DB.Model(&MsgHistory{}).
-				Where("g_id in ? and uid in ?", []interface{}{u.GID, user.GID}, userIds).
+				Where("g_id = ? and uid in ?", u.GID, userIds).
 				Update("g_id", user.GID).
 				Update("uid", user.UID)
 		}
