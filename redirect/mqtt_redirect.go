@@ -64,6 +64,7 @@ func (r *MQTTRedirect) Destroy() {
 
 func (r *MQTTRedirect) SetCommandHandler(fn func(BotCommand)) {
 	r.commandHandler = fn
+	log.Println("设置命令handler", fn)
 }
 
 func (r *MQTTRedirect) RedirectCommand(message CommandMessage) bool {

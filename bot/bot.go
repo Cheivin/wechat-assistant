@@ -47,15 +47,23 @@ func (b *Manager) commandHandler(command redirect.BotCommand) {
 		switch msg.Type {
 		case 1:
 			if msg.Gid != "" {
-				_, _ = b.MessageSender.SendGroupTextMsgByGid(msg.Gid, msg.Body)
+				if _, err := b.MessageSender.SendGroupTextMsgByGid(msg.Gid, msg.Body); err != nil {
+					log.Println("发送消息失败", err)
+				}
 			} else if msg.GroupName != "" {
-				_, _ = b.MessageSender.SendGroupTextMsgByGroupName(msg.GroupName, msg.Body)
+				if _, err := b.MessageSender.SendGroupTextMsgByGroupName(msg.GroupName, msg.Body); err != nil {
+					log.Println("发送消息失败", err)
+				}
 			}
 		case 2, 3, 4:
 			if msg.Gid != "" {
-				_, _ = b.MessageSender.SendGroupMediaMsgByGid(msg.Gid, msg.Type, msg.Body, msg.Filename, msg.Prompt)
+				if _, err := b.MessageSender.SendGroupMediaMsgByGid(msg.Gid, msg.Type, msg.Body, msg.Filename, msg.Prompt); err != nil {
+					log.Println("发送消息失败", err)
+				}
 			} else if msg.GroupName != "" {
-				_, _ = b.MessageSender.SendGroupMediaMsgByGroupName(msg.GroupName, msg.Type, msg.Body, msg.Filename, msg.Prompt)
+				if _, err := b.MessageSender.SendGroupMediaMsgByGroupName(msg.GroupName, msg.Type, msg.Body, msg.Filename, msg.Prompt); err != nil {
+					log.Println("发送消息失败", err)
+				}
 			}
 
 		}
