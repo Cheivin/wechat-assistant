@@ -40,6 +40,7 @@ func (r *MQTTRedirect) AfterPropertiesSet() {
 	log.Println("MQTT连接成功!")
 	// 订阅主题
 	if token := r.client.Subscribe(r.Prefix+"command/group/#", 2, func(_ mqtt.Client, msg mqtt.Message) {
+		log.Println("收到命令消息:", msg.Topic(), string(msg.Payload()))
 		if r.commandHandler != nil {
 			request := new(BotCommand)
 			if err := json.Unmarshal(msg.Payload(), request); err != nil {
