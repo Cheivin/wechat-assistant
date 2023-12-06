@@ -41,8 +41,18 @@ func (r *MQTTRedirect) AfterPropertiesSet() {
 	}
 
 	log.Println("MQTT连接成功!")
+}
+
+func (r *MQTTRedirect) Destroy() {
+	if r.client != nil {
+		r.client.Disconnect(250)
+	}
+}
+
+func (r *MQTTRedirect) SetCommandHandler(fn func(BotCommand)) {
+	r.commandHandler = fn
 	// 订阅主题
-	if token := r.client.Subscribe(r.Prefix+subTopic, 2, func(_ mqtt.Client, msg mqtt.Message) {
+	if token := r.client.Subscribe(r.Prefix+subTopic, 1, func(_ mqtt.Client, msg mqtt.Message) {
 		log.Println("收到命令消息:", msg.Topic(), string(msg.Payload()))
 		if r.commandHandler != nil {
 			request := new(BotCommand)
@@ -57,17 +67,6 @@ func (r *MQTTRedirect) AfterPropertiesSet() {
 		panic(token.Error())
 	}
 	log.Println("订阅主题:", r.Prefix+subTopic, "成功")
-
-}
-
-func (r *MQTTRedirect) Destroy() {
-	if r.client != nil {
-		r.client.Disconnect(250)
-	}
-}
-
-func (r *MQTTRedirect) SetCommandHandler(fn func(BotCommand)) {
-	r.commandHandler = fn
 }
 
 func (r *MQTTRedirect) RedirectCommand(message CommandMessage) bool {
