@@ -125,7 +125,6 @@ func (b *Manager) updateGroup() ([]Group, []GroupUser) {
 				log.Println("更新群信息失败", *groupModel, err)
 			} else if res.RowsAffected > 0 {
 				modifyGroups = append(modifyGroups, *groupModel)
-
 			}
 		} else if groupModel.GroupName != group.NickName {
 			groupModel.GroupName = group.NickName
@@ -247,12 +246,9 @@ func (b *Manager) updateMsgHistoryUser(user GroupUser) {
 		for _, u := range users {
 			userIds = append(userIds, u.UID)
 		}
-		for _, u := range users {
-			b.DB.Model(&MsgHistory{}).
-				Where("g_id = ? and uid in ?", u.GID, userIds).
-				Update("g_id", user.GID).
-				Update("uid", user.UID)
-		}
+		b.DB.Model(&MsgHistory{}).
+			Where("uid in ?", userIds).
+			Update("uid", user.UID)
 	}
 
 	b.DB.Model(&MsgHistory{}).
