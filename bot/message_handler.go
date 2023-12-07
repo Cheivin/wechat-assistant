@@ -162,7 +162,12 @@ func (h *MsgHandler) redirectMsg(ctx *openwechat.MessageContext) {
 	}
 	if ctx.IsSendBySelf() {
 		groups, _ := ctx.Owner().Groups()
-		group = groups.SearchByUserName(1, ctx.ToUserName).First().User
+		if groups != nil {
+			g := groups.SearchByUserName(1, ctx.ToUserName).First()
+			if g != nil {
+				group = g.User
+			}
+		}
 	}
 	user, err := ctx.SenderInGroup()
 	if err != nil {

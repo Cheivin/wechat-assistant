@@ -30,7 +30,26 @@ func (r *MQTTRedirect) AfterPropertiesSet() {
 		SetConnectRetry(true).
 		SetAutoReconnect(true).
 		SetConnectRetryInterval(5 * time.Second).
-		SetClientID(strings.ReplaceAll(r.Prefix, "/", "_") + "wx_assistant")
+		SetOnConnectHandler(func(client mqtt.Client) {
+			// 订阅主题
+			if token := r.client.Subscribe(r.Prefix+subTopic, 1, func(_ mqtt.Client, msg mqtt.Message) {
+				log.Println("收到命令消息:", msg.Topic(), string(msg.Payload()))
+				if r.commandHandler != nil {
+					request := new(BotCommand)
+					if err := json.Unmarshal(msg.Payload(), request); err != nil {
+						log.Println(err)
+					} else {
+						r.commandHandler(*request)
+					}
+				}
+				msg.Ack()
+			}); token.Wait() && token.Error() != nil {
+				log.Println("订阅主题:", r.Prefix+subTopic, "失败", token.Error())
+			} else {
+				log.Println("订阅主题:", r.Prefix+subTopic, "成功")
+			}
+		}).
+		SetClientID(strings.ReplaceAll(r.Prefix, "/", "_") + "wx_assistant_xxx")
 
 	opts.SetKeepAlive(60 * time.Second)
 	opts.SetPingTimeout(10 * time.Second)
@@ -51,22 +70,6 @@ func (r *MQTTRedirect) Destroy() {
 
 func (r *MQTTRedirect) SetCommandHandler(fn func(BotCommand)) {
 	r.commandHandler = fn
-	// 订阅主题
-	if token := r.client.Subscribe(r.Prefix+subTopic, 1, func(_ mqtt.Client, msg mqtt.Message) {
-		log.Println("收到命令消息:", msg.Topic(), string(msg.Payload()))
-		if r.commandHandler != nil {
-			request := new(BotCommand)
-			if err := json.Unmarshal(msg.Payload(), request); err != nil {
-				log.Println(err)
-			} else {
-				r.commandHandler(*request)
-			}
-		}
-		msg.Ack()
-	}); token.Wait() && token.Error() != nil {
-		panic(token.Error())
-	}
-	log.Println("订阅主题:", r.Prefix+subTopic, "成功")
 }
 
 func (r *MQTTRedirect) RedirectCommand(message CommandMessage) bool {
