@@ -49,7 +49,7 @@ func (r *MQTTRedirect) AfterPropertiesSet() {
 				log.Println("订阅主题:", r.Prefix+subTopic, "成功")
 			}
 		}).
-		SetClientID(strings.ReplaceAll(r.Prefix, "/", "_") + "wx_assistant_xxx")
+		SetClientID(strings.ReplaceAll(r.Prefix, "/", "_") + "wx_assistant")
 
 	opts.SetKeepAlive(60 * time.Second)
 	opts.SetPingTimeout(10 * time.Second)
