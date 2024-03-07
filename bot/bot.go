@@ -183,6 +183,13 @@ func (b *Manager) updateGroup() ([]Group, []GroupUser) {
 				} else if res.RowsAffected > 0 {
 					modifyUsers = append(modifyUsers, *groupUser)
 				}
+			} else {
+				groupUser.Time = time.Now().Unix()
+				b.DB.Model(GroupUser{}).
+					Where("g_id=? and uid=? and attr_status=?", groupModel.GID, groupUser.UID, groupUser.AttrStatus).
+					Updates(map[string]interface{}{
+						"`time`": time.Now().Unix(),
+					})
 			}
 		}
 	}
