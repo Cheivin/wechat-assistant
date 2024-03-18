@@ -139,11 +139,17 @@ func (p *RemotePlugin) Handle(_ *gorm.DB, ctx *openwechat.MessageContext) (bool,
 	if err != nil {
 		return false, err
 	}
+	msgType, _ := response.Type.Int64()
+
 	if response.Error != "" {
-		return false, errors.New(response.Error)
+		if msgType == -1 {
+			return false, errors.New(response.Error)
+		} else {
+			_, err := p.sender.SendGroupTextMsg(group, response.Error)
+			return err == nil, err
+		}
 	}
 
-	msgType, _ := response.Type.Int64()
 	switch int(msgType) {
 	case -1:
 		return false, nil
